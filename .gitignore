@@ -1,0 +1,18 @@
+.venv/
+build/
+dist/
+testdata/
+__pycache__/
+*.py[cod]
+*.spec
+*.log
+.DS_Store
+.pyinstaller-config/
+
+# Local research and generated previews
+/*.png
+/*.jpg
+/*.html
+/*.json
+/*.ses
+/js/

@@ -1,0 +1,33 @@
+name: Build Windows EXE
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'poe2arb/**'
+      - 'main.py'
+      - 'requirements.txt'
+      - 'build-windows.bat'
+      - '.github/workflows/windows.yml'
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: python -m pip install -r requirements.txt
+      - name: Test
+        run: python -m unittest discover -s tests -v
+      - name: Package
+        run: pyinstaller --noconfirm --clean --windowed --onedir --name PoE2ArbDesk --collect-all rapidocr --collect-all onnxruntime --add-data "poe2arb\demo.json;poe2arb" --add-data "poe2arb\catalog.json;poe2arb" --add-data "poe2arb\icons;poe2arb\icons" main.py
+      - name: Smoke test packaged EXE
+        shell: pwsh
+        run: |
+          .\dist\PoE2ArbDesk\PoE2ArbDesk.exe --self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PoE2ArbDesk-Windows
+          path: dist/PoE2ArbDesk/
