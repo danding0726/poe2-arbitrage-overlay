@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from .core import LiveQuote, find_candidates, historical_edges, simulate_exact
+from .core import LiveQuote, find_candidates, historical_edges, latest_market_hour, simulate_exact, simulate_reference_units
 from .catalog import item_icon, item_name, item_pixmap, item_tooltip, record
 from .data import app_data_dir, leagues, load_snapshot, sync_recent
 from .workflow import QuoteBook, CORE
@@ -247,6 +247,8 @@ class Overlay(QWidget):
         self.focus_cross = None
         self.cross_rows = []
         self.rows = []
+        self.reference_finals = {}
+        self.reference_initial = 1000
         self.verified = {}
         self.current = None
         self.fields: list[LegFields] = []
@@ -291,7 +293,7 @@ class Overlay(QWidget):
         header.addWidget(self._button("隐藏", self.hide))
         header.addWidget(self._button("×", QApplication.instance().quit))
         root.addLayout(header)
-        self.summary = QLabel("历史路线供排查 · 游戏内订单决定盈亏")
+        self.summary = QLabel("最新成交小时供排查 · 游戏内订单决定盈亏")
         self.summary.setWordWrap(True)
         root.addWidget(self.summary)
         self._build_game_ui(root)
@@ -311,7 +313,7 @@ class Overlay(QWidget):
         self.hops = QComboBox()
         self.hops.addItems(["3 步", "4 步"])
         self.sort = QComboBox()
-        self.sort.addItems(["历史价差线索", "历史成交量", "已核验净收益", "已核验金币效率"])
+        self.sort.addItems(["整数收益线索", "小时成交量", "已核验净收益", "已核验金币效率"])
         filters.addWidget(self.league, 2)
         filters.addWidget(self.base, 2)
         filters.addWidget(self.hops, 1)
@@ -339,9 +341,9 @@ class Overlay(QWidget):
         self.scout_label.setObjectName("muted")
         layout.addWidget(self.scout_label)
         self.table = QTreeWidget()
-        self.table.setHeaderLabels(["通货路线", "历史价差", "参考容量", "净收益", "每百万金"])
-        self.table.headerItem().setToolTip(1, "由每小时成交汇总推算，只用于查找可能的路线")
-        self.table.headerItem().setToolTip(2, "按最薄弱一跳的历史成交量换算为起始通货；并非当前库存")
+        self.table.setHeaderLabels(["通货路线", "整数线索", "参考容量", "净收益", "每百万金"])
+        self.table.headerItem().setToolTip(1, "按所填起始量逐跳取整；基于单小时成交均价与每跳 2% 假设价差，未扣金币费")
+        self.table.headerItem().setToolTip(2, "同一小时最薄弱一跳的成交量，换算为起始通货；并非当前库存")
         self.table.headerItem().setToolTip(3, "只有核对游戏当前订单并复算后才显示")
         self.table.headerItem().setToolTip(4, "每消耗 100 万金币净增加的起始通货；只有复算后才显示")
         self.table.setRootIsDecorated(False)
@@ -353,20 +355,13 @@ class Overlay(QWidget):
             self.table.setColumnWidth(col, width)
         self.table.itemSelectionChanged.connect(self.show_route)
         layout.addWidget(self.table)
-        self.warning = QLabel("历史价差只是线索，不是预计利润。逐步打开游戏交易栏并核对当前订单。")
+        self.warning = QLabel("单小时成交价差只是线索，不是预计利润。逐步打开游戏交易栏并核对当前订单。")
         self.warning.setObjectName("warning")
         self.warning.setWordWrap(True)
         layout.addWidget(self.warning)
         self.route_title = QLabel("选择上方路线，逐步核对游戏订单")
         self.route_title.setObjectName("section")
         layout.addWidget(self.route_title)
-        initial_row = QHBoxLayout()
-        initial_row.addWidget(QLabel("起始数量"))
-        self.initial = QLineEdit("100")
-        self.initial.setMaximumWidth(90)
-        initial_row.addWidget(self.initial)
-        initial_row.addStretch()
-        layout.addLayout(initial_row)
         guide = QLabel("每一步：游戏右侧「我拥有的」= 支付，左侧「我需要的」= 获得；可获数量另行确认。")
         guide.setObjectName("muted")
         guide.setWordWrap(True)
@@ -432,6 +427,12 @@ class Overlay(QWidget):
         self.view_mode.addItems(["闭环路线", "基础双向", "单品跨币种"])
         self.view_mode.currentIndexChanged.connect(self.refresh_game)
         mode_row.addWidget(self.view_mode, 1)
+        mode_row.addWidget(QLabel("起始量"))
+        self.initial = QLineEdit("1000")
+        self.initial.setToolTip("闭环路线按这个起始数量逐跳取整并排序；单位为所选起始通货")
+        self.initial.setFixedWidth(65)
+        self.initial.editingFinished.connect(self.scan)
+        mode_row.addWidget(self.initial)
         mode_row.addWidget(QLabel("本金缓冲"))
         self.min_roi = QLineEdit("2.0")
         self.min_roi.setToolTip("单轮模式的风险缓冲阈值；单位 %，不等于保证利润")
@@ -466,7 +467,7 @@ class Overlay(QWidget):
         self.route_heading = QLabel("基础核价完成后显示推荐路线")
         game.addWidget(self.route_heading)
         self.game_routes = QTreeWidget()
-        self.game_routes.setHeaderLabels(["路线", "进度", "历史价差"])
+        self.game_routes.setHeaderLabels(["路线", "进度", "整数线索"])
         self.game_routes.setRootIsDecorated(False)
         self.game_routes.setFixedHeight(160)
         self.game_routes.setColumnWidth(0, 300)
@@ -665,7 +666,11 @@ class Overlay(QWidget):
             self.summary.setText("请先更新历史数据，或加载演示数据")
             return
         self.quote_book.reset(league)
-        edges = historical_edges(self.snapshot.get("markets", []), league)
+        markets = self.snapshot.get("markets", [])
+        hour = latest_market_hour(markets, league)
+        hour_label = (time.strftime("%m-%d %H:00", time.localtime(hour))
+                      if hour is not None else "演示数据")
+        edges = historical_edges(markets, league)
         snapshot_is_usable = (self.scout_snapshot is not None
                               and self.scout_snapshot["league"] == league
                               and 0 <= snapshot_age(self.scout_snapshot) <= MAX_AGE_SECONDS)
@@ -674,7 +679,7 @@ class Overlay(QWidget):
             self.cross_source = f"Scout 参考价 {snapshot_age(self.scout_snapshot) // 60} 分钟前"
         else:
             self.cross_rows = find_single_item_candidates(edges)
-            self.cross_source = "历史线索"
+            self.cross_source = f"{hour_label} 单小时线索"
         self.scout_label.setText(self._scout_status_text())
         old_base = self.base.currentData()
         currencies = sorted({edge.source for edge in edges.values()}, key=lambda x: sum(e.source_volume for e in edges.values() if e.source == x), reverse=True)
@@ -694,15 +699,34 @@ class Overlay(QWidget):
             self.summary.setText("最低历史量须为整数")
             return
         rows = find_candidates(edges, base, lengths=(hops,)) if base else []
-        rows = [row for row in rows if row.limiting_start_units >= min_volume]
+        try:
+            initial = parse_integer_field(self.initial.text(), "起始数量")
+        except ValueError as exc:
+            self.summary.setText(str(exc))
+            return
+        self.reference_initial = initial
+        self.reference_finals = {}
+        for row in rows:
+            if row.limiting_start_units < min_volume:
+                continue
+            final = simulate_reference_units(row.path, initial, edges)
+            if final is not None and final > initial:
+                self.reference_finals[row.path] = final
+        rows = [row for row in rows if row.path in self.reference_finals]
         sort_index = self.sort.currentIndex()
-        if sort_index == 1:
+        if sort_index == 0:
+            rows.sort(key=lambda row: (self.reference_finals[row.path] - initial,
+                                       row.reference_gain, row.limiting_start_units), reverse=True)
+        elif sort_index == 1:
             rows.sort(key=lambda row: (row.limiting_start_units, row.reference_gain), reverse=True)
         elif sort_index == 2:
             rows.sort(key=lambda row: self.verified.get((league, row.key), {}).get("profit", float("-inf")), reverse=True)
         elif sort_index == 3:
             rows.sort(key=lambda row: self.verified.get((league, row.key), {}).get("gold_efficiency") if self.verified.get((league, row.key), {}).get("gold_efficiency") is not None else float("-inf"), reverse=True)
         self.rows = rows[:80]
+        visible_paths = {row.path for row in self.rows}
+        self.quote_book.selected_routes = [path for path in self.quote_book.selected_routes
+                                           if path in visible_paths]
         selected_key = self.current.key if self.current else None
         self.table.blockSignals(True)
         self.table.clear()
@@ -710,13 +734,15 @@ class Overlay(QWidget):
             verified = self.verified.get((league, row.key), {})
             item = QTreeWidgetItem([
                 "",
-                f"+{float(row.reference_gain)*100:.1f}%",
+                f"+{(self.reference_finals[row.path] - initial) / initial:.1%}",
                 f"{float(row.limiting_start_units):,.0f}",
                 str(verified.get("profit", "—")),
                 compact_number(verified.get("gold_efficiency")),
             ])
             item.setSizeHint(0, QSize(405, 58))
             item.setToolTip(0, " → ".join(item_tooltip(x).splitlines()[0] for x in row.path))
+            item.setToolTip(1, f"{initial:,} → {self.reference_finals[row.path]:,} {short_name(row.path[0])}；"
+                                "单小时成交均价逐跳取整，未扣金币费，需在游戏内核价")
             if verified.get("gold_efficiency") is not None:
                 item.setToolTip(4, f"{verified['gold_efficiency']:+,.2f} {short_name(row.path[0])} / 100 万金币")
             item.setForeground(1, QBrush(QColor("#e0c27b")))
@@ -736,7 +762,9 @@ class Overlay(QWidget):
         checked = sum((league, row.key) in self.verified for row in self.rows)
         cross_summary = (f" · {len(self.cross_rows)} 条 Scout 单品候选"
                          if snapshot_is_usable else "")
-        self.summary.setText(f"{league} · {len(self.rows)} 条历史路线{cross_summary} · {checked} 条已核验")
+        no_rows_hint = " · 可调整起始量或起始通货" if not self.rows else ""
+        self.summary.setText(f"{league} · {hour_label} 成交小时 · 起始量 {initial:,} · "
+                             f"{len(self.rows)} 条整数线索{cross_summary} · {checked} 条已核验{no_rows_hint}")
         self.refresh_game()
 
     def show_route(self):
@@ -750,7 +778,7 @@ class Overlay(QWidget):
         self.quote_book.select(self.current)
         self.last_model_state = None
         self.route_title.setText(
-            f"当前路线 · {len(self.current.path) - 1} 步 · 历史价差 +{float(self.current.reference_gain) * 100:.1f}%"
+            f"当前路线 · {len(self.current.path) - 1} 步 · 整数线索 +{(self.reference_finals[self.current.path] - self.reference_initial) / self.reference_initial:.1%}"
         )
         self.route_title.setWordWrap(True)
         self.fields.clear()
@@ -1163,10 +1191,10 @@ class Overlay(QWidget):
             item = QTreeWidgetItem([
                 ("✓ " if selected else "＋ ") + label,
                 f"{done}/{count}",
-                f"+{float(candidate.reference_gain)*100:.1f}%",
+                f"+{(self.reference_finals[candidate.path] - self.reference_initial) / self.reference_initial:.1%}",
             ])
             item.setData(0, Qt.ItemDataRole.UserRole, index)
-            item.setToolTip(0, "点击加入清单。历史价差仅供筛选，最终按实时订单整数复算。")
+            item.setToolTip(0, "点击加入清单。百分比已按起始量逐跳取整，尚未计入金币费和游戏内库存；最终按实时订单复算。")
             self.game_routes.addTopLevelItem(item)
         self.game_routes.blockSignals(False)
         self.round_table.blockSignals(True)

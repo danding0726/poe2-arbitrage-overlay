@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
-from itertools import permutations
 from typing import Iterable
+
+
+# Hourly traded amounts yield a volume-weighted average price. Reserve an
+# assumed fill spread because that average is not an executable order.
+REFERENCE_SPREAD = Fraction(50, 51)  # divide the observed price by 1.02
+MAX_REFERENCE_GAIN = Fraction(1, 2)
+MAX_HOURLY_PRICE_RANGE = Fraction(3, 2)
 
 
 @dataclass(frozen=True)
@@ -26,11 +32,20 @@ class Candidate:
         return " → ".join(self.path)
 
 
+def latest_market_hour(markets: Iterable[dict], league: str) -> int | None:
+    """Return the newest published hourly bucket for a league."""
+    return max((market["_hour_id"] for market in markets
+                if market.get("league") == league and isinstance(market.get("_hour_id"), int)),
+               default=None)
+
+
 def historical_edges(markets: Iterable[dict], league: str) -> dict[tuple[str, str], HistoricalEdge]:
-    """Derive indicative mid rates from paired executed volumes, never executable quotes."""
-    totals: dict[tuple[str, str], list[int]] = {}
+    """Use one published hour's VWAP, with price-range quality checks."""
+    markets = list(markets)
+    hour = latest_market_hour(markets, league)
+    edges = {}
     for market in markets:
-        if market.get("league") != league:
+        if market.get("league") != league or (hour is not None and market.get("_hour_id") != hour):
             continue
         pair = market.get("market_pair") or str(market.get("market_id", "")).split("|")
         if len(pair) != 2 or pair[0] == pair[1]:
@@ -39,23 +54,21 @@ def historical_edges(markets: Iterable[dict], league: str) -> dict[tuple[str, st
         volumes = market.get("volume_traded") or {}
         try:
             va, vb = int(volumes[a]), int(volumes[b])
-        except (KeyError, TypeError, ValueError):
+            low = market["lowest_ratio"]
+            high = market["highest_ratio"]
+            prices = (Fraction(int(low[b]), int(low[a])),
+                      Fraction(int(high[b]), int(high[a])))
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
             continue
-        if va <= 0 or vb <= 0:
+        if va <= 0 or vb <= 0 or min(prices) <= 0:
             continue
-        key = tuple(sorted((a, b)))
-        row = totals.setdefault(key, [0, 0, 0])
-        if (a, b) == key:
-            row[0] += va
-            row[1] += vb
-        else:
-            row[0] += vb
-            row[1] += va
-        row[2] += 1
-    edges = {}
-    for (a, b), (va, vb, hours) in totals.items():
-        edges[a, b] = HistoricalEdge(a, b, Fraction(vb, va), va, hours)
-        edges[b, a] = HistoricalEdge(b, a, Fraction(va, vb), vb, hours)
+        # Identical endpoints provide no evidence that both sides traded.
+        # Very scattered fills are a weak guide to a current order price.
+        if hour is not None and (min(prices) == max(prices)
+                                 or max(prices) / min(prices) > MAX_HOURLY_PRICE_RANGE):
+            continue
+        edges[a, b] = HistoricalEdge(a, b, Fraction(vb, va) * REFERENCE_SPREAD, va, 1)
+        edges[b, a] = HistoricalEdge(b, a, Fraction(va, vb) * REFERENCE_SPREAD, vb, 1)
     return edges
 
 
@@ -64,36 +77,59 @@ def find_candidates(
     base: str,
     lengths: tuple[int, ...] = (3, 4),
     min_gain: Fraction = Fraction(0),
-    max_currencies: int = 35,
 ) -> list[Candidate]:
     """Search reference-price cycles. Results are leads requiring live confirmation."""
-    currencies = {base}
-    for edge in edges.values():
-        currencies.add(edge.source)
-        currencies.add(edge.target)
-    ranked = sorted(
-        (x for x in currencies if x != base),
-        key=lambda x: sum(e.source_volume for e in edges.values() if e.source == x),
-        reverse=True,
-    )[: max_currencies - 1]
+    neighbors: dict[str, set[str]] = {}
+    for source, target in edges:
+        neighbors.setdefault(source, set()).add(target)
     found = []
-    for length in lengths:
-        for middle in permutations(ranked, length - 1):
-            path = (base, *middle, base)
-            legs = [edges.get((path[i], path[i + 1])) for i in range(length)]
-            if any(leg is None for leg in legs):
-                continue
+
+    def visit(path: tuple[str, ...], length: int) -> None:
+        if len(path) == length:
+            if (path[-1], base) not in edges:
+                return
+            cycle = (*path, base)
+            legs = [edges[a, b] for a, b in zip(cycle, cycle[1:])]
             product = Fraction(1)
             limiting = None
             for leg in legs:
-                assert leg is not None
                 capacity_in_base = Fraction(leg.source_volume, 1) / product
                 limiting = capacity_in_base if limiting is None else min(limiting, capacity_in_base)
                 product *= leg.rate
             gain = product - 1
-            if gain > min_gain:
-                found.append(Candidate(path, gain, limiting or Fraction(0)))
-    return sorted(found, key=lambda c: (c.reference_gain, c.limiting_start_units), reverse=True)
+            if min_gain < gain <= MAX_REFERENCE_GAIN:
+                found.append(Candidate(cycle, gain, limiting or Fraction(0)))
+            return
+        for target in neighbors.get(path[-1], ()):
+            if target != base and target not in path:
+                visit((*path, target), length)
+
+    for length in lengths:
+        if length >= 2:
+            visit((base,), length)
+    return sorted(found, key=lambda c: (c.reference_gain, c.limiting_start_units, c.path), reverse=True)
+
+
+def simulate_reference_units(
+    path: tuple[str, ...], initial: int,
+    edges: dict[tuple[str, str], HistoricalEdge],
+) -> int | None:
+    """Floor every hourly-VWAP leg; return None when a whole-unit route cannot run.
+
+    Hourly traded volume only limits a reference simulation. It is not live
+    stock, and the result does not include gold fees.
+    """
+    if initial <= 0 or len(path) < 3 or path[0] != path[-1]:
+        return None
+    held = initial
+    for pair in zip(path, path[1:]):
+        edge = edges.get(pair)
+        if edge is None or held > edge.source_volume:
+            return None
+        held = held * edge.rate.numerator // edge.rate.denominator
+        if held <= 0:
+            return None
+    return held
 
 
 @dataclass(frozen=True)

@@ -17,11 +17,11 @@ The default trade capture area is `[588, 160, 1328, 345]` on the user's 1920×10
 
 ## Route modes and data sources
 
-**Historical cycles:** Scan three- and four-step loops from GGG's hourly completed-trade data. This is a candidate ranking signal, not an executable quote.
+**Hourly cycles:** Scan three- and four-step loops across all currencies connected by trades in the newest published GGG hour for the selected league. Each pair's traded amounts yield an hourly volume-weighted average price (VWAP), divided by 1.02 for an assumed fill spread per leg. The reported execution-price range is used as a quality check: identical endpoints or a range wider than 50% are discarded. Apparent cycle gaps over 50% are also excluded. The overlay shows the exact source hour. The user-entered starting quantity is floored to whole units at every leg; candidates that fail to return more whole units or exceed an hourly traded amount are omitted, and the surviving routes rank by whole-unit reference profit. This screening cannot substitute for live stock, an executable lot size, or gold fees. It follows the hourly VWAP approach described by [lilmarket](https://poe2.lilmarket.io/arbitrage/), but does not reproduce all of its liquidity, consensus, minimum-profitable-lot, or gold-cost filters.
 
 **Core round trips:** Check both independently observed directions of an Exalted/Chaos/Divine pair. One direction is never inferred by inverting the other.
 
-**Cross-currency item flips:** Scan `A → item X → B → A`, where A and B are different core currencies. The preferred candidate source is Poe2Scout's `SnapshotPairs`: each pair has an independently measured `RelativePrice` ratio. If there is no snapshot for the selected league from the last two hours, the app falls back to GGG historical data. Every proposed trade is still verified with three in-game quotes.
+**Cross-currency item flips:** Scan `A → item X → B → A`, where A and B are different core currencies. The preferred candidate source is Poe2Scout's `SnapshotPairs`: each pair has an independently measured `RelativePrice` ratio. If there is no snapshot for the selected league from the last two hours, the app falls back to the newest GGG trade hour. Every proposed trade is still verified with three in-game quotes.
 
 The Poe2Scout filter requires at least 10,000 reported volume in each book and at least 1,000 `StockValue` on the receiving side, and omits indicative gaps over 50%. These are noise-reduction heuristics and can miss real opportunities. The app displays the actual `ExchangeSnapshot.Epoch` age. `SnapshotPairs` is a snapshot, **not a second-by-second executable order book**.
 
