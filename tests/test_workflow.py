@@ -77,7 +77,7 @@ class WorkflowTests(unittest.TestCase):
     def test_historical_single_item_candidates_require_two_core_books(self):
         from pathlib import Path
         import json
-        demo = json.loads((Path(__file__).parents[1] / "poe2arb" / "demo.json").read_text())
+        demo = json.loads((Path(__file__).parents[1] / "poe2arb" / "demo.json").read_text(encoding="utf-8"))
         edges = historical_edges(demo["markets"], "演示联赛")
         candidates = find_single_item_candidates(edges)
         self.assertTrue(candidates)
