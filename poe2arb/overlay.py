@@ -48,9 +48,9 @@ def parse_integer_field(text: str, label: str, minimum: int = 1) -> int:
     try:
         value = int(normalized)
     except ValueError:
-        raise ValueError(f"{label}必须是整数") from None
+        raise ValueError(f"{label}不能有小数") from None
     if value < minimum:
-        requirement = "不能为负数" if minimum == 0 else "必须为正整数"
+        requirement = "不能为负数" if minimum == 0 else "必须大于 0"
         raise ValueError(f"{label}{requirement}")
     return value
 
@@ -315,7 +315,7 @@ class Overlay(QWidget):
         self.hops = QComboBox()
         self.hops.addItems(["3 步", "4 步"])
         self.sort = QComboBox()
-        self.sort.addItems(["整数收益线索", "小时成交量", "已核验净收益", "已核验金币效率"])
+        self.sort.addItems(["行情参考收益", "小时成交量", "已核对盈亏", "每百万金币收益"])
         filters.addWidget(self.league, 2)
         filters.addWidget(self.base, 2)
         filters.addWidget(self.hops, 1)
@@ -343,17 +343,17 @@ class Overlay(QWidget):
         self.scout_label.setObjectName("muted")
         layout.addWidget(self.scout_label)
         self.table = QTreeWidget()
-        self.table.setHeaderLabels(["通货路线", "整数线索", "参考容量", "净收益", "每百万金"])
-        self.table.headerItem().setToolTip(1, "按所填起始量逐跳取整；基于单小时成交均价与每跳 2% 假设价差，未扣金币费")
+        self.table.setHeaderLabels(["通货路线", "行情参考", "小时参考量", "预计盈亏", "每百万金"])
+        self.table.headerItem().setToolTip(1, "按所填起始量模拟每次兑换；只用最近一小时成交均价，未扣金币费用，不能直接按此价格交易")
         self.table.headerItem().setToolTip(2, "同一小时最薄弱一跳的成交量，换算为起始通货；并非当前库存")
-        self.table.headerItem().setToolTip(3, "只有核对游戏当前订单并复算后才显示")
-        self.table.headerItem().setToolTip(4, "每消耗 100 万金币净增加的起始通货；只有复算后才显示")
+        self.table.headerItem().setToolTip(3, "核对游戏当前订单后，按可兑换数量估算")
+        self.table.headerItem().setToolTip(4, "每消耗 100 万金币，预计增加或减少多少起始通货；核对游戏报价后显示")
         self.table.setRootIsDecorated(False)
         self.table.setAlternatingRowColors(True)
         self.table.setIndentation(0)
         self.table.setMinimumHeight(200)
         self.table.setMaximumHeight(230)
-        for col, width in enumerate((405, 70, 70, 65, 85)):
+        for col, width in enumerate((350, 80, 90, 80, 95)):
             self.table.setColumnWidth(col, width)
         self.table.itemSelectionChanged.connect(self.show_route)
         layout.addWidget(self.table)
@@ -398,7 +398,7 @@ class Overlay(QWidget):
         amount_row.addWidget(self._button("填入已选交易", self.apply_order))
         layout.addLayout(amount_row)
         result_row = QHBoxLayout()
-        result_row.addWidget(self._button("复算闭环收益", self.simulate))
+        result_row.addWidget(self._button("计算本次盈亏", self.simulate))
         result_row.addWidget(self._button("Jev 辅助评估", self.evaluate_jev))
         result_row.addStretch()
         layout.addLayout(result_row)
@@ -479,7 +479,7 @@ class Overlay(QWidget):
         self.route_heading.setObjectName("section")
         game.addWidget(self.route_heading)
         self.game_routes = QTreeWidget()
-        self.game_routes.setHeaderLabels(["路线 · 点击选择", "报价", "小时线索"])
+        self.game_routes.setHeaderLabels(["路线 · 点击选择", "已读", "行情参考"])
         self.game_routes.setRootIsDecorated(False)
         self.game_routes.setFixedHeight(160)
         self.game_routes.setColumnWidth(0, 275)
@@ -488,7 +488,7 @@ class Overlay(QWidget):
         self.game_routes.itemClicked.connect(self.select_game_route)
         game.addWidget(self.game_routes)
         self.round_table = QTreeWidget()
-        self.round_table.setHeaderLabels(["交易方向 · 点击选择", "状态", "本次净赚", "每百万金"])
+        self.round_table.setHeaderLabels(["交易方向 · 点击选择", "状态", "预计盈亏", "每百万金"])
         self.round_table.setRootIsDecorated(False)
         self.round_table.setFixedHeight(160)
         self.round_table.headerItem().setToolTip(3, "每消耗 100 万金币净赚多少起始通货；按起始通货分组比较")
@@ -700,7 +700,7 @@ class Overlay(QWidget):
             self.cross_source = f"Scout 参考价 {snapshot_age(self.scout_snapshot) // 60} 分钟前"
         else:
             self.cross_rows = find_single_item_candidates(edges)
-            self.cross_source = f"{hour_label} 单小时线索"
+            self.cross_source = f"{hour_label} 小时行情参考"
         self.scout_label.setText(self._scout_status_text())
         old_base = self.base.currentData()
         currencies = sorted({edge.source for edge in edges.values()}, key=lambda x: sum(e.source_volume for e in edges.values() if e.source == x), reverse=True)
@@ -717,7 +717,7 @@ class Overlay(QWidget):
         try:
             min_volume = max(0, int(self.min_volume.text() or "0"))
         except ValueError:
-            self.summary.setText("最低历史量须为整数")
+            self.summary.setText("最低历史成交量不能有小数")
             return
         rows = find_candidates(edges, base, lengths=(hops,)) if base else []
         try:
@@ -763,7 +763,7 @@ class Overlay(QWidget):
             item.setSizeHint(0, QSize(405, 58))
             item.setToolTip(0, " → ".join(item_tooltip(x).splitlines()[0] for x in row.path))
             item.setToolTip(1, f"{initial:,} → {self.reference_finals[row.path]:,} {short_name(row.path[0])}；"
-                                "单小时成交均价逐跳取整，未扣金币费，需在游戏内核价")
+                                "只按最近一小时成交均价模拟兑换；未扣金币费，需在游戏内核对当前价格")
             if verified.get("gold_efficiency") is not None:
                 item.setToolTip(4, f"{verified['gold_efficiency']:+,.2f} {short_name(row.path[0])} / 100 万金币")
             item.setForeground(1, QBrush(QColor("#e0c27b")))
@@ -799,7 +799,7 @@ class Overlay(QWidget):
         self.quote_book.select(self.current)
         self.last_model_state = None
         self.route_title.setText(
-            f"当前路线 · {len(self.current.path) - 1} 步 · 整数线索 +{(self.reference_finals[self.current.path] - self.reference_initial) / self.reference_initial:.1%}"
+            f"当前路线 · {len(self.current.path) - 1} 步 · 行情参考 +{(self.reference_finals[self.current.path] - self.reference_initial) / self.reference_initial:.1%}"
         )
         self.route_title.setWordWrap(True)
         self.fields.clear()
@@ -849,7 +849,7 @@ class Overlay(QWidget):
         self.ocr_text.setText("OCR 将读取游戏上方已选交易栏的数量和金币费。")
         self.ocr_order = None
         self.amount_text.setText("已选交易：等待 OCR")
-        self.result.setText("逐步填写当前订单的整数数量，并确认可获数量与金币费。")
+        self.result.setText("逐步填写游戏当前订单的支付量、获得量、可兑换库存和金币费。")
         self.result.setStyleSheet("color:#a8b8b5; font-weight:normal;")
         self.refresh_game()
 
@@ -1206,7 +1206,7 @@ class Overlay(QWidget):
             "core": f"02  基础报价   {core_done} / 6",
             "choose": "03  选择路线",
             "read": "04  补齐实时报价",
-            "result": "05  整数复算结果",
+            "result": "05  当前报价收益估算",
         }[stage])
         self.start_sync.setVisible(stage == "market")
         self.mode_host.setVisible(stage in ("choose", "read", "result"))
@@ -1223,12 +1223,12 @@ class Overlay(QWidget):
         if hasattr(self, "details_scroll") and not self.compact and not self.management:
             self._set_compact(False)
         self.progress.setText({
-            "market": "候选路线来自最近成交小时；收益以游戏报价复算为准",
+            "market": "候选路线来自最近成交小时；预计盈亏以游戏当前报价计算",
             "core": "在游戏交易栏选择下方方向",
             "choose": ("选择一条路线，自动列出待核对报价" if has_candidates
                        else "暂无候选；可在设置中调整起始量或更新快照"),
             "read": "读取下方方向；已确认报价会同步给其他路线",
-            "result": "按整数份数计算 · 交易前复核库存与金币费",
+            "result": "按游戏报价和可兑换库存估算 · 下单前再核对",
         }[stage])
         for pair in ([current_pair] if stage in ("core", "read") and current_pair else []):
             card = QFrame()
@@ -1274,13 +1274,13 @@ class Overlay(QWidget):
             ])
             item.setIcon(0, item_icon(candidate.path[0]))
             item.setData(0, Qt.ItemDataRole.UserRole, index)
-            item.setToolTip(0, label + "\n小时线索已逐跳取整；未计入金币费和实时库存")
+            item.setToolTip(0, label + "\n只按小时成交价模拟兑换；未计入金币费和游戏当前库存")
             self.game_routes.addTopLevelItem(item)
         self.game_routes.blockSignals(False)
         self.round_table.blockSignals(True)
         self.round_table.clear()
         if show_cross:
-            self.round_table.setHeaderLabels(["买入 → 卖出 → 换回", "状态", "本次净赚", "每百万金"])
+            self.round_table.setHeaderLabels(["买入 → 卖出 → 换回", "状态", "预计盈亏", "每百万金"])
             entries = [(index, candidate, *self._cross_status(candidate, now))
                        for index, candidate in enumerate(self.cross_rows[:30])]
             entries.sort(key=lambda entry: (
@@ -1303,7 +1303,7 @@ class Overlay(QWidget):
                     row.setForeground(0, QBrush(QColor("#89deb1")))
                 self.round_table.addTopLevelItem(row)
         else:
-            self.round_table.setHeaderLabels(["交易方向 · 点击选择", "状态", "本次净赚", "每百万金"])
+            self.round_table.setHeaderLabels(["交易方向 · 点击选择", "状态", "预计盈亏", "每百万金"])
             pairs = [(source, target) for source in CORE for target in CORE if source != target]
             entries = [(pair, *self._round_status(pair, now)) for pair in pairs]
             entries.sort(key=lambda entry: (
@@ -1331,16 +1331,16 @@ class Overlay(QWidget):
             if self.focus_cross:
                 status, roi, opportunity = self._cross_status(self.focus_cross, now)
                 if opportunity:
-                    label = "需按份数重读金币费" if not opportunity.single_order_each else "按当前三笔订单"
-                    efficiency = (f"每 100 万金币约净 {opportunity.profit_per_million_gold:+,.2f} "
+                    label = "交易多次时请再核对金币费" if not opportunity.single_order_each else "按当前三笔订单"
+                    efficiency = (f"每 100 万金币预计盈亏 {opportunity.profit_per_million_gold:+,.2f} "
                                   f"{short_name(self.focus_cross.path[0])}" if opportunity.profit_per_million_gold is not None
                                   else "金币费用为 0，无法计算金币效率")
                     self.game_result.setText(
                         f"{status}  ·  {short_name(self.focus_cross.path[1])}\n"
                         f"{opportunity.start:,} → {opportunity.finish:,} {short_name(self.focus_cross.path[0])}"
-                        f"    本次净赚 {opportunity.profit:+,}  ·  收益率 {roi}\n"
+                        f"    预计盈亏 {opportunity.profit:+,}  ·  收益率 {roi}\n"
                         f"{efficiency}  ·  金币约 {opportunity.estimated_gold:,}\n"
-                        f"整数份数 {' / '.join(map(str, opportunity.all_lots))}  ·  {label}"
+                        f"各步交易次数 {' / '.join(map(str, opportunity.all_lots))}  ·  {label}"
                     )
                 else:
                     self.game_result.setText(f"{status}。清单会复用基础汇率，并优先核对该通货的买卖方向。")
@@ -1351,13 +1351,13 @@ class Overlay(QWidget):
                 status, roi, opportunity = self._round_status(self.focus_pair, now)
                 if opportunity:
                     label = "需按数量重读金币费" if not opportunity.single_order_each else "按当前两笔订单"
-                    efficiency = (f"每 100 万金币约净 {opportunity.profit_per_million_gold:+,.2f} "
+                    efficiency = (f"每 100 万金币预计盈亏 {opportunity.profit_per_million_gold:+,.2f} "
                                   f"{short_name(self.focus_pair[0])}" if opportunity.profit_per_million_gold is not None
                                   else "金币费用为 0，无法计算金币效率")
                     self.game_result.setText(
                         f"{status}  ·  最早报价 {opportunity.age_seconds} 秒前\n"
                         f"{opportunity.start:,} → {opportunity.finish:,} {short_name(self.focus_pair[0])}"
-                        f"    本次净赚 {opportunity.profit:+,}  ·  收益率 {roi}\n"
+                        f"    预计盈亏 {opportunity.profit:+,}  ·  收益率 {roi}\n"
                         f"{efficiency}  ·  金币约 {opportunity.estimated_gold:,}\n{label}"
                     )
                 else:
@@ -1379,9 +1379,9 @@ class Overlay(QWidget):
                     initial = int(self.initial.text()) if hasattr(self, "initial") else quotes[0].pay
                     result = simulate_exact(path, initial, quotes)
                     findings.append(
-                        f"{short_name(path[0])}  ·  本次净赚 {result.profit:+,}"
+                        f"{short_name(path[0])}  ·  预计盈亏 {result.profit:+,}"
                         f"  ·  收益率 {result.profit/initial:+.1%}\n"
-                        + (f"每 100 万金币净赚 {result.profit_per_million_gold:+,.2f} {short_name(path[0])}"
+                        + (f"每 100 万金币预计盈亏 {result.profit_per_million_gold:+,.2f} {short_name(path[0])}"
                            if result.profit_per_million_gold is not None else "金币效率待确认")
                         + f"  ·  金币 {result.gold:,}"
                     )
@@ -1420,14 +1420,14 @@ class Overlay(QWidget):
             leftovers = ", ".join(f"{value} {short_name(currency)}" for currency, value in result.holdings.items() if value > 0 and currency != self.current.path[0])
             sign = "+" if result.profit >= 0 else ""
             base_name = short_name(self.current.path[0])
-            verdict = "账面为正，仍须确认可成交量" if result.profit > 0 else "当前订单无正收益"
+            verdict = "按当前报价估算有收益；下单前再确认库存" if result.profit > 0 else "当前订单预计无收益"
             detail = (
                 f"{verdict}：{initial:,} → {result.final:,} {base_name}，"
-                f"本次净 {sign}{result.profit:,}（本金 {result.profit / initial:+.1%}）；"
+                f"预计盈亏 {sign}{result.profit:,}（收益率 {result.profit / initial:+.1%}）；"
                 f"消耗金币 {result.gold:,}。"
             )
             if result.profit_per_million_gold is not None:
-                detail += f" 每 100 万金币净 {result.profit_per_million_gold:+,.2f} {base_name}。"
+                detail += f" 每 100 万金币预计盈亏 {result.profit_per_million_gold:+,.2f} {base_name}。"
             self.result.setText(detail)
             self.result.setStyleSheet(f"color:{'#89deb1' if result.profit > 0 else '#ef9d8f'}; font-weight:bold;")
             if leftovers:
@@ -1443,13 +1443,13 @@ class Overlay(QWidget):
             for quote in quotes:
                 self.quote_book.put(quote)
             self.scan()
-            self.summary.setText(f"已核验：净 {sign}{result.profit:,} {base_name} · 金币 {result.gold:,}")
+            self.summary.setText(f"已按当前报价估算：盈亏 {sign}{result.profit:,} {base_name} · 金币 {result.gold:,}")
         except (ValueError, TypeError) as exc:
             self._error(str(exc))
 
     def evaluate_jev(self):
         if self.last_model_state is None:
-            self._error("请先完成整数复算")
+            self._error("请先按当前订单计算收益")
             return
         if not os.environ.get("TYPESAFE_API_KEY"):
             self._error("未设置 TYPESAFE_API_KEY；Jev 辅助评估可选")
@@ -1484,7 +1484,7 @@ class Overlay(QWidget):
             return json.load(response)["answers"]["review"]
 
     def _jev_done(self, answer):
-        self.result.setText(f"Jev：{answer.get('choice', '无结果')}；置信度 {answer.get('confidence', '—')}。模型只辅助复核，收益以整数计算与实际成交为准。")
+        self.result.setText(f"Jev：{answer.get('choice', '无结果')}；置信度 {answer.get('confidence', '—')}。模型只辅助复核，最终以游戏实际成交为准。")
 
     def closeEvent(self, event):
         if sys.platform == "win32":
