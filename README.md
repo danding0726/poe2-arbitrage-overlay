@@ -2,7 +2,7 @@
 
 A Windows desktop overlay for researching currency exchange routes in Path of Exile 2. It stays on top of the game as a small, translucent checklist. The app does not need a browser or a local web server while running.
 
-![In-game checklist with Poe2Scout candidate routes](docs/overlay-scout.png)
+![Staged in-game overlay with candidate routes (demo data)](docs/overlay-workflow.png)
 
 The interface is currently in Chinese. `Ctrl+Shift+F8` shows or hides it; `Ctrl+Shift+F9` expands or collapses it. Borderless windowed game mode is recommended.
 

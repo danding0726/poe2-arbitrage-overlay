@@ -284,7 +284,7 @@ class Overlay(QWidget):
         root.setSpacing(9)
         root.setAlignment(Qt.AlignmentFlag.AlignTop)
         header = QHBoxLayout()
-        self.title = QLabel("◈  PoE2 通货路线助手")
+        self.title = QLabel("◈  通货套利清单")
         self.title.setObjectName("title")
         header.addWidget(self.title, 1)
         self.expand_button = self._button("收起", self.toggle_compact)
@@ -294,7 +294,8 @@ class Overlay(QWidget):
         header.addWidget(self._button("隐藏", self.hide))
         header.addWidget(self._button("×", QApplication.instance().quit))
         root.addLayout(header)
-        self.summary = QLabel("最新成交小时供排查 · 游戏内订单决定盈亏")
+        self.summary = QLabel("选择联赛后，更新最近一小时行情")
+        self.summary.setObjectName("status")
         self.summary.setWordWrap(True)
         root.addWidget(self.summary)
         self._build_game_ui(root)
@@ -417,26 +418,27 @@ class Overlay(QWidget):
         game.setContentsMargins(0, 0, 0, 0)
         game.setSpacing(5)
         game.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.step_heading = QLabel("第 1 步 · 更新行情")
+        self.step_heading = QLabel("01  更新行情")
         self.step_heading.setObjectName("section")
         game.addWidget(self.step_heading)
         self.progress = QLabel("")
         self.progress.setObjectName("muted")
         game.addWidget(self.progress)
-        self.start_sync = self._button("更新最近一小时行情", self.sync_history)
+        self.start_sync = self._button("更新最近一小时行情  →", self.sync_history)
+        self.start_sync.setObjectName("primaryButton")
         game.addWidget(self.start_sync)
         mode_row = QHBoxLayout()
         self.view_mode = QComboBox()
-        self.view_mode.addItems(["闭环路线", "基础双向", "单品跨币种"])
+        self.view_mode.addItems(["3–4 步闭环", "基础双向套利", "单品跨币种套利"])
         self.view_mode.currentIndexChanged.connect(self.refresh_game)
         mode_row.addWidget(self.view_mode, 1)
-        mode_row.addWidget(QLabel("起始量"))
+        mode_row.addWidget(QLabel("起始"))
         self.initial = QLineEdit("1000")
         self.initial.setToolTip("闭环路线按这个起始数量逐跳取整并排序；单位为所选起始通货")
         self.initial.setFixedWidth(65)
         self.initial.editingFinished.connect(self.scan)
         mode_row.addWidget(self.initial)
-        mode_row.addWidget(QLabel("本金缓冲"))
+        mode_row.addWidget(QLabel("缓冲"))
         self.min_roi = QLineEdit("2.0")
         self.min_roi.setToolTip("单轮模式的风险缓冲阈值；单位 %，不等于保证利润")
         self.min_roi.setFixedWidth(55)
@@ -448,14 +450,14 @@ class Overlay(QWidget):
         game.addWidget(self.mode_host)
         self.task_scroll = QScrollArea()
         self.task_scroll.setWidgetResizable(True)
-        self.task_scroll.setFixedHeight(198)
+        self.task_scroll.setFixedHeight(76)
         self.task_host = QWidget()
         self.task_layout = QVBoxLayout(self.task_host)
         self.task_layout.setContentsMargins(4, 4, 4, 4)
         self.task_scroll.setWidget(self.task_host)
         game.addWidget(self.task_scroll)
         stock_row = QHBoxLayout()
-        self.game_capture = QLabel("在游戏中选好当前方向，再点「读取」")
+        self.game_capture = QLabel("核对识别结果后确认")
         self.game_capture.setObjectName("muted")
         self.game_capture.setWordWrap(True)
         stock_row.addWidget(self.game_capture, 1)
@@ -467,22 +469,26 @@ class Overlay(QWidget):
         self.gold_input.setPlaceholderText("金币费")
         self.gold_input.setFixedWidth(80)
         stock_row.addWidget(self.gold_input)
-        stock_row.addWidget(self._button("确认这笔报价", self.confirm_capture))
+        confirm_button = self._button("确认报价", self.confirm_capture)
+        confirm_button.setObjectName("primaryButton")
+        stock_row.addWidget(confirm_button)
         self.capture_row = QWidget()
         self.capture_row.setLayout(stock_row)
         game.addWidget(self.capture_row)
-        self.route_heading = QLabel("基础核价完成后显示推荐路线")
+        self.route_heading = QLabel("候选路线")
+        self.route_heading.setObjectName("section")
         game.addWidget(self.route_heading)
         self.game_routes = QTreeWidget()
-        self.game_routes.setHeaderLabels(["路线", "进度", "整数线索"])
+        self.game_routes.setHeaderLabels(["路线 · 点击选择", "报价", "小时线索"])
         self.game_routes.setRootIsDecorated(False)
         self.game_routes.setFixedHeight(160)
-        self.game_routes.setColumnWidth(0, 300)
-        self.game_routes.setColumnWidth(1, 60)
+        self.game_routes.setColumnWidth(0, 275)
+        self.game_routes.setColumnWidth(1, 55)
+        self.game_routes.setColumnWidth(2, 118)
         self.game_routes.itemClicked.connect(self.select_game_route)
         game.addWidget(self.game_routes)
         self.round_table = QTreeWidget()
-        self.round_table.setHeaderLabels(["单轮交易", "状态", "操作净赚", "每百万金"])
+        self.round_table.setHeaderLabels(["交易方向 · 点击选择", "状态", "本次净赚", "每百万金"])
         self.round_table.setRootIsDecorated(False)
         self.round_table.setFixedHeight(160)
         self.round_table.headerItem().setToolTip(3, "每消耗 100 万金币净赚多少起始通货；按起始通货分组比较")
@@ -494,6 +500,7 @@ class Overlay(QWidget):
         self.game_result = QLabel("")
         self.game_result.setObjectName("result")
         self.game_result.setWordWrap(True)
+        self.game_result.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         game.addWidget(self.game_result)
         game.addStretch(1)
         self.refresh_game()
@@ -505,20 +512,26 @@ class Overlay(QWidget):
 
     def _style(self):
         self.setStyleSheet("""
-        QWidget { color:#e7eced; font:12px 'Microsoft YaHei','Segoe UI'; }
-        QFrame#panel { background-color:rgba(18,22,26,165); border:1px solid rgba(129,147,145,105); border-radius:13px; }
-        QLabel#title { font-size:15px; font-weight:bold; color:#eef9ef; }
-        QLabel#section { font-size:13px; font-weight:bold; color:#d4e6d8; }
+        QWidget { color:#e7ece9; font:12px 'Microsoft YaHei','Segoe UI'; }
+        QFrame#panel { background-color:rgba(15,20,23,182); border:1px solid rgba(138,163,150,115); border-radius:14px; }
+        QLabel#title { font-size:15px; font-weight:700; color:#f2f6ee; }
+        QLabel#section { font-size:13px; font-weight:700; color:#dcebdd; }
+        QLabel#status { color:#adc0b8; font-size:11px; padding:2px 1px 5px 1px; border-bottom:1px solid rgba(138,163,150,65); }
         QLabel#warning { color:#e0c27b; background:rgba(110,85,40,55); border-radius:6px; padding:6px; }
         QLabel#muted { color:#a8b8b5; font-size:11px; }
-        QLabel#result { color:#8ee1b8; font-weight:bold; }
-        QPushButton,QComboBox,QLineEdit { background:rgba(34,42,47,170); border:1px solid #52615f; border-radius:6px; padding:5px 7px; }
-        QPushButton:hover { background:#3c5d50; }
-        QTreeWidget,QScrollArea { background:rgba(15,20,24,125); border:1px solid rgba(70,84,81,130); border-radius:6px; }
-        QTreeWidget { alternate-background-color:rgba(32,38,42,115); selection-background-color:#355849; }
-        QHeaderView::section { background:#283038; color:#dce8e1; border:0; border-right:1px solid #40504b; padding:4px; }
+        QLabel#result { color:#a5e6bf; font-weight:600; background:rgba(42,80,60,78); border:1px solid rgba(115,181,136,90); border-radius:8px; padding:9px; }
+        QLabel#taskSide { color:#a5b6ad; font-size:10px; }
+        QLabel#taskArrow { color:#8de0ac; font-size:20px; font-weight:bold; }
+        QFrame#taskCard { background:rgba(31,42,40,150); border:1px solid rgba(119,151,133,95); border-radius:9px; }
+        QPushButton,QComboBox,QLineEdit { background:rgba(36,47,48,190); border:1px solid rgba(115,139,128,125); border-radius:6px; padding:6px 8px; }
+        QPushButton:hover { background:#355a47; border-color:#8cca9e; }
+        QPushButton#primaryButton { background:#376f50; border-color:#74bd8c; color:#f4fff4; font-weight:700; }
+        QPushButton#primaryButton:hover { background:#458b60; }
+        QTreeWidget,QScrollArea { background:rgba(13,19,20,135); border:1px solid rgba(91,114,102,120); border-radius:7px; }
+        QTreeWidget { alternate-background-color:rgba(38,50,47,110); selection-background-color:#37624b; }
+        QHeaderView::section { background:#2c3d39; color:#dce8e1; border:0; border-right:1px solid #40504b; padding:5px; }
         QScrollArea QWidget { background:transparent; }
-        QTreeWidget::item:selected { background:#355849; }
+        QTreeWidget::item:selected { background:#37624b; }
         """)
 
     def _set_compact(self, compact):
@@ -527,12 +540,12 @@ class Overlay(QWidget):
         self.details_scroll.setVisible(not compact and self.management)
         self.expand_button.setText("展开" if compact else "收起")
         self.setFixedSize(520 if not self.management else 760,
-                          82 if compact else (790 if self.management else
-                                             {"market": 195,
-                                              "core": 295 if getattr(self, "capture_active", False) else 210,
-                                              "choose": 405,
-                                              "read": 535 if getattr(self, "capture_active", False) else 475,
-                                              "result": 465}.get(getattr(self, "ui_stage", "market"), 210)))
+                          84 if compact else (790 if self.management else
+                                             {"market": 198,
+                                              "core": 280 if getattr(self, "capture_active", False) else 210,
+                                              "choose": 390,
+                                              "read": 525 if getattr(self, "capture_active", False) else 490,
+                                              "result": 450}.get(getattr(self, "ui_stage", "market"), 210)))
 
     def toggle_management(self):
         self.management = not self.management
@@ -771,8 +784,8 @@ class Overlay(QWidget):
         cross_summary = (f" · {len(self.cross_rows)} 条 Scout 单品候选"
                          if snapshot_is_usable else "")
         no_rows_hint = " · 可调整起始量或起始通货" if not self.rows else ""
-        self.summary.setText(f"{league} · {hour_label} 成交小时 · 起始量 {initial:,} · "
-                             f"{len(self.rows)} 条整数线索{cross_summary} · {checked} 条已核验{no_rows_hint}")
+        self.summary.setText(f"{league}  ·  {hour_label} 成交小时  ·  {len(self.rows)} 条闭环线索"
+                             f"{cross_summary}{no_rows_hint}")
         self.refresh_game()
 
     def show_route(self):
@@ -1189,53 +1202,63 @@ class Overlay(QWidget):
                         active_pending[0] if stage == "read" and active_pending else None)
         self.capture_active = stage in ("core", "read") and self.capture_pair is not None
         self.step_heading.setText({
-            "market": "第 1 步 · 更新行情",
-            "core": f"第 2 步 · 基础报价 {core_done}/6",
-            "choose": "第 3 步 · 选择交易路线",
-            "read": "第 4 步 · 补读当前报价",
-            "result": "第 5 步 · 查看整数复算",
+            "market": "01  更新行情",
+            "core": f"02  基础报价   {core_done} / 6",
+            "choose": "03  选择路线",
+            "read": "04  补齐实时报价",
+            "result": "05  整数复算结果",
         }[stage])
         self.start_sync.setVisible(stage == "market")
         self.mode_host.setVisible(stage in ("choose", "read", "result"))
         self.task_scroll.setVisible(stage in ("core", "read"))
-        self.task_scroll.setFixedHeight(63)
+        self.task_scroll.setFixedHeight(76)
         self.capture_row.setVisible(self.capture_active)
         self.route_heading.setVisible(stage in ("choose", "read", "result"))
         self.game_result.setVisible(stage == "result")
         self.game_host.setFixedHeight({"market": 90,
-                                       "core": 185 if self.capture_active else 100,
+                                       "core": 175 if self.capture_active else 110,
                                        "choose": 290,
-                                       "read": 420 if self.capture_active else 360,
-                                       "result": 350}[stage])
+                                       "read": 415 if self.capture_active else 345,
+                                       "result": 365}[stage])
         if hasattr(self, "details_scroll") and not self.compact and not self.management:
             self._set_compact(False)
         self.progress.setText({
-            "market": "加载后开始读取游戏内报价",
-            "core": (f"游戏右侧支付 {short_name(current_pair[0])}，左侧获得 {short_name(current_pair[1])}"
-                     if current_pair else "选好游戏中的通货交换方向"),
-            "choose": ("点击下方候选项；选中后会出现需要补读的报价" if has_candidates
-                       else "暂无候选项；在设置中调整起始通货、起始量或更新快照"),
-            "read": (f"游戏右侧支付 {short_name(current_pair[0])}，左侧获得 {short_name(current_pair[1])}"
-                     if current_pair else "读取当前报价"),
-            "result": "本轮报价已齐；交易前重新确认库存和金币费",
+            "market": "候选路线来自最近成交小时；收益以游戏报价复算为准",
+            "core": "在游戏交易栏选择下方方向",
+            "choose": ("选择一条路线，自动列出待核对报价" if has_candidates
+                       else "暂无候选；可在设置中调整起始量或更新快照"),
+            "read": "读取下方方向；已确认报价会同步给其他路线",
+            "result": "按整数份数计算 · 交易前复核库存与金币费",
         }[stage])
         for pair in ([current_pair] if stage in ("core", "read") and current_pair else []):
-            line = QWidget()
-            row = QHBoxLayout(line)
-            row.setContentsMargins(2, 1, 2, 1)
-            row.addWidget(item_badge(pair[0]))
-            arrow = QLabel("→")
-            arrow.setStyleSheet("color:#93d7b1")
-            row.addWidget(arrow)
-            row.addWidget(item_badge(pair[1]))
+            card = QFrame()
+            card.setObjectName("taskCard")
+            row = QHBoxLayout(card)
+            row.setContentsMargins(10, 9, 10, 9)
+            row.setSpacing(6)
+            for label, item_id in (("右侧 · 我拥有的", pair[0]), ("左侧 · 我需要的", pair[1])):
+                if label.startswith("左侧"):
+                    arrow = QLabel("→")
+                    arrow.setObjectName("taskArrow")
+                    row.addWidget(arrow)
+                side = QWidget()
+                stack = QVBoxLayout(side)
+                stack.setContentsMargins(0, 0, 0, 0)
+                stack.setSpacing(3)
+                side_label = QLabel(label)
+                side_label.setObjectName("taskSide")
+                stack.addWidget(side_label)
+                stack.addWidget(item_badge(item_id))
+                row.addWidget(side)
             row.addStretch()
-            row.addWidget(self._button("读取", lambda _checked=False, p=pair: self.capture_task(p)))
-            self.task_layout.addWidget(line)
+            read_button = self._button("读取报价", lambda _checked=False, p=pair: self.capture_task(p))
+            read_button.setObjectName("primaryButton")
+            row.addWidget(read_button)
+            self.task_layout.addWidget(card)
         self.task_layout.addStretch()
-        self.route_heading.setText(f"单品跨币种 · {self.cross_source} · 点击核价" if show_cross else
-                                   "双向报价 · 点击优先复核这两个方向" if show_rounds else
-                                   "推荐路线 · 点击加入待核价清单" if core_done == 6 else
-                                   "基础核价完成后显示推荐路线")
+        self.route_heading.setText(f"单品跨币种  ·  {self.cross_source}" if show_cross else
+                                   "基础双向  ·  选择交易对" if show_rounds else
+                                   "候选闭环  ·  点击选择")
         self.game_routes.setVisible(stage in ("choose", "read", "result") and not show_rounds and not show_cross)
         self.round_table.setVisible(stage in ("choose", "read", "result") and (show_rounds or show_cross))
         self.game_routes.blockSignals(True)
@@ -1245,18 +1268,19 @@ class Overlay(QWidget):
             label = " → ".join(short_name(x) for x in candidate.path)
             selected = candidate.path in self.quote_book.selected_routes
             item = QTreeWidgetItem([
-                ("✓ " if selected else "＋ ") + label,
+                ("✓  " if selected else "＋  ") + label,
                 f"{done}/{count}",
                 f"+{(self.reference_finals[candidate.path] - self.reference_initial) / self.reference_initial:.1%}",
             ])
+            item.setIcon(0, item_icon(candidate.path[0]))
             item.setData(0, Qt.ItemDataRole.UserRole, index)
-            item.setToolTip(0, "点击加入清单。百分比已按起始量逐跳取整，尚未计入金币费和游戏内库存；最终按实时订单复算。")
+            item.setToolTip(0, label + "\n小时线索已逐跳取整；未计入金币费和实时库存")
             self.game_routes.addTopLevelItem(item)
         self.game_routes.blockSignals(False)
         self.round_table.blockSignals(True)
         self.round_table.clear()
         if show_cross:
-            self.round_table.setHeaderLabels(["买入 → 卖出 → 换回", "状态", "操作净赚", "每百万金"])
+            self.round_table.setHeaderLabels(["买入 → 卖出 → 换回", "状态", "本次净赚", "每百万金"])
             entries = [(index, candidate, *self._cross_status(candidate, now))
                        for index, candidate in enumerate(self.cross_rows[:30])]
             entries.sort(key=lambda entry: (
@@ -1279,7 +1303,7 @@ class Overlay(QWidget):
                     row.setForeground(0, QBrush(QColor("#89deb1")))
                 self.round_table.addTopLevelItem(row)
         else:
-            self.round_table.setHeaderLabels(["单轮交易", "状态", "操作净赚", "每百万金"])
+            self.round_table.setHeaderLabels(["交易方向 · 点击选择", "状态", "本次净赚", "每百万金"])
             pairs = [(source, target) for source in CORE for target in CORE if source != target]
             entries = [(pair, *self._round_status(pair, now)) for pair in pairs]
             entries.sort(key=lambda entry: (
@@ -1312,11 +1336,11 @@ class Overlay(QWidget):
                                   f"{short_name(self.focus_cross.path[0])}" if opportunity.profit_per_million_gold is not None
                                   else "金币费用为 0，无法计算金币效率")
                     self.game_result.setText(
-                        f"{status} · {short_name(self.focus_cross.path[1])} · "
-                        f"{opportunity.start:,} → {opportunity.finish:,} "
-                        f"{short_name(self.focus_cross.path[0])}，本次净 {opportunity.profit:+,}（本金 {roi}）。"
-                        f"{efficiency}；消耗金币约 {opportunity.estimated_gold:,}，"
-                        f"份数 {' / '.join(map(str, opportunity.all_lots))}，{label}。"
+                        f"{status}  ·  {short_name(self.focus_cross.path[1])}\n"
+                        f"{opportunity.start:,} → {opportunity.finish:,} {short_name(self.focus_cross.path[0])}"
+                        f"    本次净赚 {opportunity.profit:+,}  ·  收益率 {roi}\n"
+                        f"{efficiency}  ·  金币约 {opportunity.estimated_gold:,}\n"
+                        f"整数份数 {' / '.join(map(str, opportunity.all_lots))}  ·  {label}"
                     )
                 else:
                     self.game_result.setText(f"{status}。清单会复用基础汇率，并优先核对该通货的买卖方向。")
@@ -1331,10 +1355,10 @@ class Overlay(QWidget):
                                   f"{short_name(self.focus_pair[0])}" if opportunity.profit_per_million_gold is not None
                                   else "金币费用为 0，无法计算金币效率")
                     self.game_result.setText(
-                        f"{status} · {opportunity.start:,} → {opportunity.finish:,} "
-                        f"{short_name(self.focus_pair[0])}，本次净 {opportunity.profit:+,}（本金 {roi}）。"
-                        f"{efficiency}；消耗金币约 {opportunity.estimated_gold:,}，{label}。"
-                        f"最早报价 {opportunity.age_seconds} 秒前。"
+                        f"{status}  ·  最早报价 {opportunity.age_seconds} 秒前\n"
+                        f"{opportunity.start:,} → {opportunity.finish:,} {short_name(self.focus_pair[0])}"
+                        f"    本次净赚 {opportunity.profit:+,}  ·  收益率 {roi}\n"
+                        f"{efficiency}  ·  金币约 {opportunity.estimated_gold:,}\n{label}"
                     )
                 else:
                     self.game_result.setText(f"{status}。点击清单优先重读双向报价。")
@@ -1355,10 +1379,11 @@ class Overlay(QWidget):
                     initial = int(self.initial.text()) if hasattr(self, "initial") else quotes[0].pay
                     result = simulate_exact(path, initial, quotes)
                     findings.append(
-                        f"{short_name(path[0])}本次净 {result.profit:+,}（本金 {result.profit/initial:+.1%}） · "
-                        + (f"每 100 万金币净 {result.profit_per_million_gold:+,.2f} {short_name(path[0])} · "
-                           if result.profit_per_million_gold is not None else "")
-                        + f"金币 {result.gold:,}"
+                        f"{short_name(path[0])}  ·  本次净赚 {result.profit:+,}"
+                        f"  ·  收益率 {result.profit/initial:+.1%}\n"
+                        + (f"每 100 万金币净赚 {result.profit_per_million_gold:+,.2f} {short_name(path[0])}"
+                           if result.profit_per_million_gold is not None else "金币效率待确认")
+                        + f"  ·  金币 {result.gold:,}"
                     )
                     self.verified[(self.league.currentText(), candidate.key)] = {
                         "profit": result.profit,
@@ -1366,7 +1391,7 @@ class Overlay(QWidget):
                     }
                 except (ValueError, TypeError) as exc:
                     findings.append(f"{short_name(path[0])}路线待调整交易量：{exc}")
-            self.game_result.setText("  |  ".join(findings) or "选路线后显示进度与收益")
+            self.game_result.setText("\n\n".join(findings) or "选路线后显示进度与收益")
         else:
             self.game_result.setText("点击候选路线；已核对的交易对会自动复用。" if self.core_complete
                                      else "先核对基础交易对，再点击推荐路线加入清单。")
