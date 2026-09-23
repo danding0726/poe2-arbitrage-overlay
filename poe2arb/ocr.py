@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import re
+from fractions import Fraction
+from math import ceil
 from PIL import Image, ImageEnhance, ImageOps
 
 
@@ -68,6 +70,54 @@ def _selected_order_from_text(lines, scores) -> dict | None:
         "gold": numbers[2][0],
         "confidence": round(min(score for _, score in numbers), 3),
     }
+
+
+def _best_ladder_quote(lines, scores, boxes) -> dict | None:
+    """Read the first executable ratio/stock row from the hovered market ladder."""
+    if boxes is None or not (len(lines) == len(scores) == len(boxes)):
+        return None
+    ratios = []
+    stocks = []
+    for text, score, box in zip(lines, scores, boxes):
+        if score < 0.7 or box is None or len(box) == 0:
+            continue
+        points = list(box)
+        center_x = sum(float(point[0]) for point in points) / len(points)
+        center_y = sum(float(point[1]) for point in points) / len(points)
+        height = max(float(point[1]) for point in points) - min(float(point[1]) for point in points)
+        ratio = re.fullmatch(r"\s*(\d[\d,]*(?:\.\d+)?)\s*[:：]\s*(\d[\d,]*(?:\.\d+)?)\s*", text)
+        integer = re.fullmatch(r"\s*(\d[\d,]*)\s*", text)
+        if ratio:
+            ratios.append((center_y, center_x, height, ratio.groups(), score))
+        elif integer:
+            stocks.append((center_y, center_x, int(integer.group(1).replace(",", "")), score))
+    for ratio_y, ratio_x, height, (left_text, right_text), ratio_score in sorted(ratios):
+        same_row = [
+            stock for stock in stocks
+            if stock[1] > ratio_x and abs(stock[0] - ratio_y) <= max(10, height * 0.6)
+        ]
+        # RapidOCR can miss the first row's right-hand stock while still
+        # detecting the same quantity already filled in above the ladder.
+        if not same_row:
+            same_row = [
+                stock for stock in stocks
+                if abs(stock[0] - ratio_y) <= max(10, height * 0.9)
+            ]
+        if not same_row:
+            continue
+        _, _, stock, stock_score = min(same_row, key=lambda item: abs(item[0] - ratio_y))
+        left = Fraction(left_text.replace(",", ""))
+        right = Fraction(right_text.replace(",", ""))
+        if left <= 0 or right <= 0 or stock <= 0:
+            continue
+        return {
+            "receive": stock,
+            "pay": ceil(stock * right / left),
+            "stock": stock,
+            "ratio": f"{left_text}:{right_text}",
+            "confidence": round(min(ratio_score, stock_score), 3),
+        }
+    return None
 
 
 def _parse(lines: list[str], scores: list[float]) -> dict:
@@ -138,19 +188,30 @@ def read_exchange_panel(data: bytes) -> dict:
 
 
 def read_stock_region(data: bytes) -> dict:
-    """Read a calibrated region containing only the available target-item count.
+    """Read the best ratio/stock row, or a region containing one stock integer.
 
-    A separate calibration is required because stock placement differs by market
-    view. Reject ratios, merged labels and ambiguous multiple values.
+    A separate calibration is required because the hovered market ladder moves
+    with the exchange UI. A single-number region remains supported as fallback.
     """
     from rapidocr import RapidOCR
     image = _image(data)
     image = image.resize((max(160, image.width * 4), max(88, image.height * 4)))
     image = ImageOps.autocontrast(ImageEnhance.Contrast(image).enhance(1.5))
-    lines, scores = _recognized(RapidOCR(), image)
+    import numpy as np
+    result = RapidOCR()(np.asarray(image))
+    lines = list(result.txts or [])
+    scores = list(result.scores or [])
+    ladder_quote = _best_ladder_quote(lines, scores, getattr(result, "boxes", None))
+    if ladder_quote:
+        return {
+            "stock": ladder_quote["stock"],
+            "confidence": ladder_quote["confidence"],
+            "lines": lines,
+            "best_quote": ladder_quote,
+        }
     joined = "".join(lines).strip()
     match = re.fullmatch(r"(\d[\d,]*)", joined)
     value = int(match.group(1).replace(",", "")) if match else None
     confidence = min(scores) if scores else 0
     return {"stock": value if value and confidence >= 0.7 else None,
-            "confidence": round(confidence, 3), "lines": lines}
+            "confidence": round(confidence, 3), "lines": lines, "best_quote": None}

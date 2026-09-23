@@ -387,7 +387,7 @@ class Overlay(QWidget):
         capture_row.addWidget(self.roi_label, 1)
         layout.addLayout(capture_row)
         stock_calibration = QHBoxLayout()
-        stock_calibration.addWidget(self._button("校准库存数字位置", self.calibrate_stock))
+        stock_calibration.addWidget(self._button("校准比率/库存浮层", self.calibrate_stock))
         self.stock_roi_label = QLabel(self._stock_roi_text())
         stock_calibration.addWidget(self.stock_roi_label, 1)
         layout.addLayout(stock_calibration)
@@ -457,6 +457,10 @@ class Overlay(QWidget):
         self.stock_input.setPlaceholderText("可获库存")
         self.stock_input.setFixedWidth(80)
         stock_row.addWidget(self.stock_input)
+        self.gold_input = QLineEdit()
+        self.gold_input.setPlaceholderText("金币费")
+        self.gold_input.setFixedWidth(80)
+        stock_row.addWidget(self.gold_input)
         stock_row.addWidget(self._button("确认", self.confirm_capture))
         game.addLayout(stock_row)
         self.route_heading = QLabel("基础核价完成后显示推荐路线")
@@ -813,7 +817,7 @@ class Overlay(QWidget):
 
     def _stock_roi_text(self) -> str:
         roi = self.settings.get("stock_roi")
-        return f"库存 OCR {roi['bbox']}" if roi else "待实机框选库存数字"
+        return f"最优档 OCR {roi['bbox']}" if roi else "待框选浮层最上方比率与库存"
 
     def calibrate(self):
         self.calibration_kind = "trade"
@@ -822,7 +826,7 @@ class Overlay(QWidget):
 
     def calibrate_stock(self):
         self.calibration_kind = "stock"
-        self.stock_roi_label.setText("2.5 秒后截图；请把鼠标移回游戏，使库存数字显示")
+        self.stock_roi_label.setText("2.5 秒后截图；请悬停显示比率/库存浮层")
         self.hide()
         QTimer.singleShot(HOVER_CAPTURE_DELAY_MS, self._open_calibrator)
 
@@ -834,7 +838,7 @@ class Overlay(QWidget):
             image.save(stream, format="PNG")
             pix = QPixmap()
             pix.loadFromData(stream.getvalue())
-            label = ("单一库存整数（不要框列表或其他文字）"
+            label = ("浮层最上方比率与库存（可包含表头）"
                      if self.calibration_kind == "stock" else "交易报价区域")
             self.calibrator = CalibrationWindow(pix, label)
             self.calibrator.selected.connect(self._save_roi)
@@ -866,7 +870,7 @@ class Overlay(QWidget):
         self.amount_text.setText("已选交易：等待 OCR")
         delay = HOVER_CAPTURE_DELAY_MS if self.settings.get("stock_roi") else DEFAULT_CAPTURE_DELAY_MS
         if delay == HOVER_CAPTURE_DELAY_MS:
-            self.game_capture.setText("2.5 秒后截图；请立即把鼠标移回游戏，使库存数字显示")
+            self.game_capture.setText("2.5 秒后截图；请立即悬停游戏比率，显示最优比率与库存")
         self.hide()
         QTimer.singleShot(delay, self._capture_and_ocr)
 
@@ -884,7 +888,7 @@ class Overlay(QWidget):
             stock_roi = self.settings.get("stock_roi")
             if stock_roi:
                 if list(full.size) != stock_roi["screen"]:
-                    raise ValueError("库存 OCR 校准分辨率已变化，请重新校准")
+                    raise ValueError("最优档 OCR 校准分辨率已变化，请重新校准")
                 stock_stream = io.BytesIO()
                 full.crop(tuple(stock_roi["bbox"])).save(stock_stream, format="PNG")
                 stock_data = stock_stream.getvalue()
@@ -903,20 +907,37 @@ class Overlay(QWidget):
         return result
 
     def _ocr_done(self, result):
-        self.ocr_order = result.get("selected_order")
-        self.ocr_stock = (result.get("stock_result") or {}).get("stock")
+        stock_result = result.get("stock_result") or {}
+        best_quote = stock_result.get("best_quote")
+        self.ocr_stock = stock_result.get("stock")
+        if best_quote:
+            self.ocr_order = {
+                "pay": best_quote["pay"],
+                "receive": best_quote["receive"],
+                "gold": None,
+                "confidence": best_quote["confidence"],
+            }
+        else:
+            self.ocr_order = result.get("selected_order")
         text = " | ".join(result["lines"]) or "没有识别到文本"
         self.ocr_text.setText(f"OCR {result['confidence']:.2f}：{text}。请确认方向与实际数量。")
         if self.ocr_order:
             order = self.ocr_order
-            self.amount_text.setText(f"支付右侧 {order['pay']} → 获得左侧 {order['receive']}；金币 {order['gold']:,}（{order['confidence']:.2f}）")
+            gold_text = f"{order['gold']:,}" if order.get("gold") is not None else "待手填"
+            ratio_text = f"；最优档 {best_quote['ratio']}" if best_quote else ""
+            self.amount_text.setText(
+                f"支付右侧 {order['pay']} → 获得左侧 {order['receive']}；"
+                f"金币 {gold_text}（{order['confidence']:.2f}）{ratio_text}"
+            )
             if self.ocr_stock:
                 self.stock_input.setText(str(self.ocr_stock))
+            if order.get("gold") is not None:
+                self.gold_input.setText(str(order["gold"]))
             self.game_capture.setText(
-                f"已读 {order['pay']} → {order['receive']}，金币 {order['gold']:,}；"
+                f"已读 {order['pay']} → {order['receive']}，金币 {gold_text}；"
                 + (f"库存 {self.ocr_stock}。核对方向后确认" if self.ocr_stock else "库存待 OCR 校准或手动确认")
             )
-            if self.capture_pair and self.ocr_stock:
+            if self.capture_pair and self.ocr_stock and order.get("gold") is not None:
                 recognized = "".join(result.get("lines", [])).replace(" ", "")
                 name_sets = [
                     {short_name(item_id), record(item_id).get("zh_tw", "")}
@@ -939,10 +960,17 @@ class Overlay(QWidget):
         fields = self.fields[self.ocr_leg]
         fields.pay.setText(str(self.ocr_order["pay"]))
         fields.receive.setText(str(self.ocr_order["receive"]))
-        fields.gold.setText(str(self.ocr_order["gold"]))
+        if self.ocr_order.get("gold") is not None:
+            fields.gold.setText(str(self.ocr_order["gold"]))
         self._mark_observed(self.ocr_leg)
         if self.ocr_stock:
             fields.stock.setText(str(self.ocr_stock))
+        if self.ocr_order.get("gold") is None:
+            fields.gold.setFocus()
+            self.result.setText(
+                f"第 {self.ocr_leg + 1} 跳最优报价与库存已填入；金币费用被浮层遮挡，请手动填写。"
+            )
+        elif self.ocr_stock:
             self.confirm_capture()
         else:
             fields.stock.setFocus()
@@ -956,12 +984,15 @@ class Overlay(QWidget):
             return
         try:
             stock = parse_integer_field(self.stock_input.text(), "可获数量")
+            gold = self.ocr_order.get("gold")
+            if gold is None:
+                gold = parse_integer_field(self.gold_input.text(), "金币费用", minimum=0)
             quote = LiveQuote(*self.capture_pair, self.ocr_order["pay"],
                               self.ocr_order["receive"], stock,
-                              self.ocr_order["gold"], int(time.time()))
+                              gold, int(time.time()))
             self.quote_book.put(quote)
         except (ValueError, TypeError) as exc:
-            self.game_capture.setText(f"库存需确认：{exc}")
+            self.game_capture.setText(f"报价需确认：{exc}")
             return
         for index, fields in enumerate(self.fields):
             if self.current and (self.current.path[index], self.current.path[index+1]) == self.capture_pair:
@@ -974,6 +1005,7 @@ class Overlay(QWidget):
         self.capture_pair = None
         self.ocr_order = None
         self.stock_input.clear()
+        self.gold_input.clear()
         self.refresh_game()
 
     def capture_task(self, pair):
@@ -982,6 +1014,7 @@ class Overlay(QWidget):
         self.ocr_order = None
         self.ocr_stock = None
         self.stock_input.clear()
+        self.gold_input.clear()
         self.game_capture.setText(f"请在游戏中选好 {short_name(pair[0])} → {short_name(pair[1])}，正在截图…")
         if not self.settings.get("roi"):
             self.game_capture.setText("先在设置页校准交易栏")
@@ -990,7 +1023,7 @@ class Overlay(QWidget):
         if delay == HOVER_CAPTURE_DELAY_MS:
             self.game_capture.setText(
                 f"请在游戏中选好 {short_name(pair[0])} → {short_name(pair[1])}；"
-                "2.5 秒后截图，请立即把鼠标移到库存数字位置"
+                "2.5 秒后截图，请立即悬停比率以显示最优档库存"
             )
         self.hide()
         QTimer.singleShot(delay, self._capture_and_ocr)
