@@ -23,6 +23,9 @@ from .workflow import QuoteBook, CORE
 from .roundtrip import analyze_round_trip, analyze_sized_cycle, find_single_item_candidates
 from .scout import MAX_AGE_SECONDS, fetch_scout_snapshot, load_scout_snapshot, scout_candidates, snapshot_age
 
+DEFAULT_CAPTURE_DELAY_MS = 650
+HOVER_CAPTURE_DELAY_MS = 2500
+
 
 def short_name(item_id: str) -> str:
     return item_name(item_id)
@@ -36,6 +39,20 @@ def compact_number(value: float | None) -> str:
     if abs(value) >= 1_000:
         return f"{value / 1_000:+.1f}k"
     return f"{value:+.1f}"
+
+
+def parse_integer_field(text: str, label: str, minimum: int = 1) -> int:
+    normalized = text.strip().replace(",", "")
+    if not normalized:
+        raise ValueError(f"{label}未填写")
+    try:
+        value = int(normalized)
+    except ValueError:
+        raise ValueError(f"{label}必须是整数") from None
+    if value < minimum:
+        requirement = "不能为负数" if minimum == 0 else "必须为正整数"
+        raise ValueError(f"{label}{requirement}")
+    return value
 
 
 def settings_path() -> Path:
@@ -801,12 +818,13 @@ class Overlay(QWidget):
     def calibrate(self):
         self.calibration_kind = "trade"
         self.hide()
-        QTimer.singleShot(650, self._open_calibrator)
+        QTimer.singleShot(DEFAULT_CAPTURE_DELAY_MS, self._open_calibrator)
 
     def calibrate_stock(self):
         self.calibration_kind = "stock"
+        self.stock_roi_label.setText("2.5 秒后截图；请把鼠标移回游戏，使库存数字显示")
         self.hide()
-        QTimer.singleShot(650, self._open_calibrator)
+        QTimer.singleShot(HOVER_CAPTURE_DELAY_MS, self._open_calibrator)
 
     def _open_calibrator(self):
         from PIL import ImageGrab
@@ -816,7 +834,8 @@ class Overlay(QWidget):
             image.save(stream, format="PNG")
             pix = QPixmap()
             pix.loadFromData(stream.getvalue())
-            label = "单一库存数字" if self.calibration_kind == "stock" else "交易报价区域"
+            label = ("单一库存整数（不要框列表或其他文字）"
+                     if self.calibration_kind == "stock" else "交易报价区域")
             self.calibrator = CalibrationWindow(pix, label)
             self.calibrator.selected.connect(self._save_roi)
             self.calibrator.finished.connect(self.show)
@@ -845,8 +864,11 @@ class Overlay(QWidget):
             self.fields[leg].observed_at = 0
         self.ocr_order = None
         self.amount_text.setText("已选交易：等待 OCR")
+        delay = HOVER_CAPTURE_DELAY_MS if self.settings.get("stock_roi") else DEFAULT_CAPTURE_DELAY_MS
+        if delay == HOVER_CAPTURE_DELAY_MS:
+            self.game_capture.setText("2.5 秒后截图；请立即把鼠标移回游戏，使库存数字显示")
         self.hide()
-        QTimer.singleShot(650, self._capture_and_ocr)
+        QTimer.singleShot(delay, self._capture_and_ocr)
 
     def _capture_and_ocr(self):
         from PIL import ImageGrab
@@ -917,17 +939,23 @@ class Overlay(QWidget):
         fields = self.fields[self.ocr_leg]
         fields.pay.setText(str(self.ocr_order["pay"]))
         fields.receive.setText(str(self.ocr_order["receive"]))
-        fields.stock.setText(str(self.ocr_stock) if self.ocr_stock else "")
         fields.gold.setText(str(self.ocr_order["gold"]))
         self._mark_observed(self.ocr_leg)
-        self.confirm_capture()
+        if self.ocr_stock:
+            fields.stock.setText(str(self.ocr_stock))
+            self.confirm_capture()
+        else:
+            fields.stock.setFocus()
+            self.result.setText(
+                f"第 {self.ocr_leg + 1} 跳报价已填入；可获数量未识别，请手动填写或重新校准库存数字位置。"
+            )
 
     def confirm_capture(self):
         if not self.capture_pair or not self.ocr_order:
             self.game_capture.setText("先对清单中的交易对截图识别报价")
             return
         try:
-            stock = int(self.stock_input.text())
+            stock = parse_integer_field(self.stock_input.text(), "可获数量")
             quote = LiveQuote(*self.capture_pair, self.ocr_order["pay"],
                               self.ocr_order["receive"], stock,
                               self.ocr_order["gold"], int(time.time()))
@@ -958,8 +986,14 @@ class Overlay(QWidget):
         if not self.settings.get("roi"):
             self.game_capture.setText("先在设置页校准交易栏")
             return
+        delay = HOVER_CAPTURE_DELAY_MS if self.settings.get("stock_roi") else DEFAULT_CAPTURE_DELAY_MS
+        if delay == HOVER_CAPTURE_DELAY_MS:
+            self.game_capture.setText(
+                f"请在游戏中选好 {short_name(pair[0])} → {short_name(pair[1])}；"
+                "2.5 秒后截图，请立即把鼠标移到库存数字位置"
+            )
         self.hide()
-        QTimer.singleShot(650, self._capture_and_ocr)
+        QTimer.singleShot(delay, self._capture_and_ocr)
 
     def select_game_route(self, item, column):
         index = item.data(0, Qt.ItemDataRole.UserRole)
@@ -1232,11 +1266,14 @@ class Overlay(QWidget):
                     raise ValueError(f"第 {i+1} 跳报价未确认或已超过 3 分钟")
                 quote = LiveQuote(
                     self.current.path[i], self.current.path[i+1],
-                    int(fields.pay.text()), int(fields.receive.text()),
-                    int(fields.stock.text()), int(fields.gold.text()), fields.observed_at,
+                    parse_integer_field(fields.pay.text(), f"第 {i+1} 跳支付数量"),
+                    parse_integer_field(fields.receive.text(), f"第 {i+1} 跳获得数量"),
+                    parse_integer_field(fields.stock.text(), f"第 {i+1} 跳可获数量"),
+                    parse_integer_field(fields.gold.text(), f"第 {i+1} 跳金币费用", minimum=0),
+                    fields.observed_at,
                 )
                 quotes.append(quote)
-            initial = int(self.initial.text())
+            initial = parse_integer_field(self.initial.text(), "起始数量")
             result = simulate_exact(self.current.path, initial, quotes)
             leftovers = ", ".join(f"{value} {short_name(currency)}" for currency, value in result.holdings.items() if value > 0 and currency != self.current.path[0])
             sign = "+" if result.profit >= 0 else ""

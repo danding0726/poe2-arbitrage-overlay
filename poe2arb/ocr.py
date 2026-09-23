@@ -18,6 +18,58 @@ def _recognized(engine, image: Image.Image) -> tuple[list[str], list[float]]:
     return list(result.txts or []), list(result.scores or [])
 
 
+def _selected_order_from_detections(lines, scores, boxes) -> dict | None:
+    """Read the two upper amounts and lower gold fee from OCR coordinates."""
+    if boxes is None or not (len(lines) == len(scores) == len(boxes)):
+        return None
+    numbers = []
+    for text, score, box in zip(lines, scores, boxes):
+        match = re.fullmatch(r"\s*(\d[\d,]*)\s*", text)
+        if not match or score < 0.7 or box is None or len(box) == 0:
+            continue
+        points = list(box)
+        numbers.append({
+            "value": int(match.group(1).replace(",", "")),
+            "score": score,
+            "x": sum(float(point[0]) for point in points) / len(points),
+            "y": sum(float(point[1]) for point in points) / len(points),
+        })
+    # The calibrated panel should contain exactly two order amounts on its
+    # upper row and one gold fee below. Extra standalone integers are unsafe.
+    if len(numbers) != 3:
+        return None
+    gold = max(numbers, key=lambda item: item["y"])
+    amounts = sorted((item for item in numbers if item is not gold), key=lambda item: item["x"])
+    if gold["y"] <= max(item["y"] for item in amounts):
+        return None
+    return {
+        "receive": amounts[0]["value"],
+        "pay": amounts[1]["value"],
+        "gold": gold["value"],
+        "confidence": round(min(item["score"] for item in numbers), 3),
+    }
+
+
+def _selected_order_from_text(lines, scores) -> dict | None:
+    """Fallback for RapidOCR outputs whose boxes do not align with their text."""
+    joined = "".join(lines).replace(" ", "")
+    if "我需要的" not in joined or "我拥有的" not in joined:
+        return None
+    numbers = []
+    for text, score in zip(lines, scores):
+        match = re.fullmatch(r"\s*(\d[\d,]*)\s*", text)
+        if match:
+            numbers.append((int(match.group(1).replace(",", "")), score))
+    if len(numbers) != 3 or min(score for _, score in numbers) < 0.7:
+        return None
+    return {
+        "receive": numbers[0][0],
+        "pay": numbers[1][0],
+        "gold": numbers[2][0],
+        "confidence": round(min(score for _, score in numbers), 3),
+    }
+
+
 def _parse(lines: list[str], scores: list[float]) -> dict:
     ratios = []
     numbers = []
@@ -50,8 +102,17 @@ def read_exchange_panel(data: bytes) -> dict:
     image = _image(data)
     engine = RapidOCR()
     enhanced = ImageOps.autocontrast(ImageEnhance.Contrast(image).enhance(1.5))
-    lines, scores = _recognized(engine, enhanced)
+    import numpy as np
+    recognized = engine(np.asarray(enhanced))
+    lines = list(recognized.txts or [])
+    scores = list(recognized.scores or [])
     result = _parse(lines, scores)
+    result["selected_order"] = (
+        _selected_order_from_detections(lines, scores, recognized.boxes)
+        or _selected_order_from_text(lines, scores)
+    )
+    if result["selected_order"]:
+        return result
     values = []
     value_scores = []
     # Fractions measured from the selected panel [588,160,1328,345].
@@ -73,8 +134,6 @@ def read_exchange_panel(data: bytes) -> dict:
             "receive": values[0], "pay": values[1], "gold": values[2],
             "confidence": round(min(value_scores), 3),
         }
-    else:
-        result["selected_order"] = None
     return result
 
 
