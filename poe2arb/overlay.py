@@ -282,6 +282,7 @@ class Overlay(QWidget):
         root = QVBoxLayout(self.panel)
         root.setContentsMargins(14, 12, 14, 14)
         root.setSpacing(9)
+        root.setAlignment(Qt.AlignmentFlag.AlignTop)
         header = QHBoxLayout()
         self.title = QLabel("◈  PoE2 通货路线助手")
         self.title.setObjectName("title")
@@ -416,12 +417,14 @@ class Overlay(QWidget):
         game.setContentsMargins(0, 0, 0, 0)
         game.setSpacing(5)
         game.setAlignment(Qt.AlignmentFlag.AlignTop)
-        heading = QLabel("实时核价清单")
-        heading.setObjectName("section")
-        game.addWidget(heading)
-        self.progress = QLabel("先核对崇高石、混沌石、神圣石的双向报价")
+        self.step_heading = QLabel("第 1 步 · 更新行情")
+        self.step_heading.setObjectName("section")
+        game.addWidget(self.step_heading)
+        self.progress = QLabel("")
         self.progress.setObjectName("muted")
         game.addWidget(self.progress)
+        self.start_sync = self._button("更新最近一小时行情", self.sync_history)
+        game.addWidget(self.start_sync)
         mode_row = QHBoxLayout()
         self.view_mode = QComboBox()
         self.view_mode.addItems(["闭环路线", "基础双向", "单品跨币种"])
@@ -440,7 +443,9 @@ class Overlay(QWidget):
         self.min_roi.editingFinished.connect(self.refresh_game)
         mode_row.addWidget(self.min_roi)
         mode_row.addWidget(QLabel("%"))
-        game.addLayout(mode_row)
+        self.mode_host = QWidget()
+        self.mode_host.setLayout(mode_row)
+        game.addWidget(self.mode_host)
         self.task_scroll = QScrollArea()
         self.task_scroll.setWidgetResizable(True)
         self.task_scroll.setFixedHeight(198)
@@ -450,7 +455,7 @@ class Overlay(QWidget):
         self.task_scroll.setWidget(self.task_host)
         game.addWidget(self.task_scroll)
         stock_row = QHBoxLayout()
-        self.game_capture = QLabel("点击待核价交易对，游戏内选好对应方向后截图")
+        self.game_capture = QLabel("在游戏中选好当前方向，再点「读取」")
         self.game_capture.setObjectName("muted")
         self.game_capture.setWordWrap(True)
         stock_row.addWidget(self.game_capture, 1)
@@ -462,8 +467,10 @@ class Overlay(QWidget):
         self.gold_input.setPlaceholderText("金币费")
         self.gold_input.setFixedWidth(80)
         stock_row.addWidget(self.gold_input)
-        stock_row.addWidget(self._button("确认", self.confirm_capture))
-        game.addLayout(stock_row)
+        stock_row.addWidget(self._button("确认这笔报价", self.confirm_capture))
+        self.capture_row = QWidget()
+        self.capture_row.setLayout(stock_row)
+        game.addWidget(self.capture_row)
         self.route_heading = QLabel("基础核价完成后显示推荐路线")
         game.addWidget(self.route_heading)
         self.game_routes = QTreeWidget()
@@ -484,10 +491,11 @@ class Overlay(QWidget):
         self.round_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.round_table.itemClicked.connect(self.select_round_row)
         game.addWidget(self.round_table)
-        self.game_result = QLabel("选路线后，共用已核对的交易对；全部就绪时自动复算。")
+        self.game_result = QLabel("")
         self.game_result.setObjectName("result")
         self.game_result.setWordWrap(True)
         game.addWidget(self.game_result)
+        game.addStretch(1)
         self.refresh_game()
 
     def _button(self, title, callback):
@@ -518,13 +526,13 @@ class Overlay(QWidget):
         self.game_host.setVisible(not compact and not self.management)
         self.details_scroll.setVisible(not compact and self.management)
         self.expand_button.setText("展开" if compact else "收起")
-        show_table = getattr(self, "view_mode", None) and (
-            self.view_mode.currentIndex() in (1, 2) or getattr(self, "core_complete", False)
-        )
         self.setFixedSize(520 if not self.management else 760,
                           82 if compact else (790 if self.management else
-                                             (665 if show_table and getattr(self, "has_pending", False)
-                                              else 535 if show_table else 530)))
+                                             {"market": 195,
+                                              "core": 295 if getattr(self, "capture_active", False) else 210,
+                                              "choose": 405,
+                                              "read": 535 if getattr(self, "capture_active", False) else 475,
+                                              "result": 465}.get(getattr(self, "ui_stage", "market"), 210)))
 
     def toggle_management(self):
         self.management = not self.management
@@ -981,6 +989,8 @@ class Overlay(QWidget):
         else:
             self.amount_text.setText("已选交易未可靠识别，请手动填写")
             self.game_capture.setText("报价 OCR 未可靠识别，请在设置页填写")
+        if self.capture_pair:
+            self.refresh_game()
 
     def apply_order(self):
         if not self.ocr_order or self.ocr_leg >= len(self.fields):
@@ -1149,19 +1159,67 @@ class Overlay(QWidget):
         core_done = sum(self.quote_book.get(pair) is not None for pair in core_pairs)
         self.core_complete = core_done == 6
         self.has_pending = bool(pending)
-        self.task_scroll.setFixedHeight(198 if pending else 55)
         show_rounds = self.view_mode.currentIndex() == 1
         show_cross = self.view_mode.currentIndex() == 2
-        show_table = show_rounds or show_cross or self.core_complete
-        self.game_host.setFixedHeight(550 if show_table and pending else 420 if show_table else 415)
+        has_candidates = bool(self.cross_rows) if show_cross else (True if show_rounds else bool(self.rows))
+        has_market = bool(self.snapshot.get("markets"))
+        has_choice = (bool(self.focus_pair) if show_rounds else
+                      bool(self.focus_cross) if show_cross else
+                      bool(self.quote_book.selected_routes))
+        if show_rounds and self.focus_pair:
+            active_pairs = {self.focus_pair, (self.focus_pair[1], self.focus_pair[0])}
+        elif show_cross and self.focus_cross:
+            active_pairs = set(zip(self.focus_cross.path, self.focus_cross.path[1:]))
+        else:
+            active_pairs = {pair for path in self.quote_book.selected_routes
+                            for pair in zip(path, path[1:])}
+        active_pending = [pair for pair in pending if pair in active_pairs]
+        if not has_market:
+            self.ui_stage = "market"
+        elif core_done < 6:
+            self.ui_stage = "core"
+        elif not has_choice:
+            self.ui_stage = "choose"
+        elif active_pending:
+            self.ui_stage = "read"
+        else:
+            self.ui_stage = "result"
+        stage = self.ui_stage
+        current_pair = (pending[0] if stage == "core" and pending else
+                        active_pending[0] if stage == "read" and active_pending else None)
+        self.capture_active = stage in ("core", "read") and self.capture_pair is not None
+        self.step_heading.setText({
+            "market": "第 1 步 · 更新行情",
+            "core": f"第 2 步 · 基础报价 {core_done}/6",
+            "choose": "第 3 步 · 选择交易路线",
+            "read": "第 4 步 · 补读当前报价",
+            "result": "第 5 步 · 查看整数复算",
+        }[stage])
+        self.start_sync.setVisible(stage == "market")
+        self.mode_host.setVisible(stage in ("choose", "read", "result"))
+        self.task_scroll.setVisible(stage in ("core", "read"))
+        self.task_scroll.setFixedHeight(63)
+        self.capture_row.setVisible(self.capture_active)
+        self.route_heading.setVisible(stage in ("choose", "read", "result"))
+        self.game_result.setVisible(stage == "result")
+        self.game_host.setFixedHeight({"market": 90,
+                                       "core": 185 if self.capture_active else 100,
+                                       "choose": 290,
+                                       "read": 420 if self.capture_active else 360,
+                                       "result": 350}[stage])
         if hasattr(self, "details_scroll") and not self.compact and not self.management:
             self._set_compact(False)
-        self.progress.setText(
-            f"基础汇率 {core_done}/6 · {len(pending)} 项待核价 · "
-            + ("单轮报价 ≤45 秒，读取间隔 ≤25 秒" if show_rounds or show_cross
-               else "报价超过 3 分钟自动回到清单")
-        )
-        for pair in pending:
+        self.progress.setText({
+            "market": "加载后开始读取游戏内报价",
+            "core": (f"游戏右侧支付 {short_name(current_pair[0])}，左侧获得 {short_name(current_pair[1])}"
+                     if current_pair else "选好游戏中的通货交换方向"),
+            "choose": ("点击下方候选项；选中后会出现需要补读的报价" if has_candidates
+                       else "暂无候选项；在设置中调整起始通货、起始量或更新快照"),
+            "read": (f"游戏右侧支付 {short_name(current_pair[0])}，左侧获得 {short_name(current_pair[1])}"
+                     if current_pair else "读取当前报价"),
+            "result": "本轮报价已齐；交易前重新确认库存和金币费",
+        }[stage])
+        for pair in ([current_pair] if stage in ("core", "read") and current_pair else []):
             line = QWidget()
             row = QHBoxLayout(line)
             row.setContentsMargins(2, 1, 2, 1)
@@ -1173,15 +1231,13 @@ class Overlay(QWidget):
             row.addStretch()
             row.addWidget(self._button("读取", lambda _checked=False, p=pair: self.capture_task(p)))
             self.task_layout.addWidget(line)
-        if not pending:
-            self.task_layout.addWidget(QLabel("✓ 当前清单全部核对完成"))
         self.task_layout.addStretch()
         self.route_heading.setText(f"单品跨币种 · {self.cross_source} · 点击核价" if show_cross else
                                    "双向报价 · 点击优先复核这两个方向" if show_rounds else
                                    "推荐路线 · 点击加入待核价清单" if core_done == 6 else
                                    "基础核价完成后显示推荐路线")
-        self.game_routes.setVisible(core_done == 6 and not show_rounds and not show_cross)
-        self.round_table.setVisible(show_rounds or show_cross)
+        self.game_routes.setVisible(stage in ("choose", "read", "result") and not show_rounds and not show_cross)
+        self.round_table.setVisible(stage in ("choose", "read", "result") and (show_rounds or show_cross))
         self.game_routes.blockSignals(True)
         self.game_routes.clear()
         for index, candidate in enumerate(self.rows[:8]):

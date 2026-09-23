@@ -8,10 +8,12 @@ The interface is currently in Chinese. `Ctrl+Shift+F8` shows or hides it; `Ctrl+
 
 ## How it works
 
-1. Load GGG's hourly exchange history and/or a Poe2Scout snapshot in **Settings**. The initial checklist asks for the six directed exchanges among Exalted, Chaos, and Divine Orbs.
-2. Select each requested pair manually in the game's Currency Exchange. Click **Read** to capture the selected trade panel. OCR reads the two currencies, order quantities, and gold fee. A separately calibrated OCR region reads the available quantity. If any field is uncertain, enter or confirm it manually.
-3. Completed pairs disappear from the checklist and their quotes are reused by every candidate route that needs the same direction.
-4. Choose a route. The checklist requests any missing quotes, then simulates whole order lots using the current quantities and available stock. The result shows net profit per operation, profit per 1 million gold, required gold, and return on the starting currency.
+The overlay reveals one step at a time:
+
+1. Click **Update latest hourly market data** in the overlay. You can change the league and route filters in **Settings**.
+2. Read the six directed exchanges among Exalted, Chaos, and Divine Orbs, one pair at a time. For the pair shown, select the source currency under **I Have** on the game's right side and the target under **I Want** on the left, then click **Read**. OCR captures the selected order; a separately calibrated region can read available stock. Confirm uncertain stock or gold values in the overlay.
+3. Once the six pairs are complete, choose a candidate route or a single-round mode. Any missing pair appears as the next read task. A completed quote is reused by routes that need the same direction.
+4. When all quotes for the selection are ready, the overlay shows the whole-lot calculation: net profit per operation, profit per 1 million gold, required gold, and return on the starting currency.
 
 The default trade capture area is `[588, 160, 1328, 345]` on the user's 1920×1080 reference screenshot without the inventory panel. It covers the selected exchange at the top of the exchange window. Recalibrate it if your resolution, UI scale, or window position differs. The available stock region must be calibrated separately in the game.
 
