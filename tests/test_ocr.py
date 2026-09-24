@@ -5,7 +5,6 @@ import numpy as np
 from poe2arb.ocr import (
     _best_ladder_quote,
     _selected_order_from_detections,
-    _selected_order_from_text,
 )
 
 
@@ -38,24 +37,30 @@ class ExchangeOcrTests(unittest.TestCase):
 
         self.assertIsNone(_selected_order_from_detections(lines, scores, boxes))
 
-    def test_falls_back_to_labeled_text_when_boxes_do_not_align(self):
-        lines = ["我需要的", "1:6.90", "我拥有的", "10", "1:6.90", "69", "1,600"]
+    def test_binds_amounts_to_labels_not_ocr_output_order(self):
+        lines = ["我拥有的", "10", "我需要的", "69", "1,600"]
         scores = [0.97] * len(lines)
+        boxes = np.asarray([
+            box(550, 5), box(500, 50), box(50, 5), box(150, 50), box(330, 105),
+        ])
 
-        order = _selected_order_from_text(lines, scores)
+        order = _selected_order_from_detections(lines, scores, boxes)
 
         self.assertEqual(order, {
-            "receive": 10,
-            "pay": 69,
+            "receive": 69,
+            "pay": 10,
             "gold": 1600,
             "confidence": 0.97,
         })
 
-    def test_text_fallback_requires_both_labels(self):
-        self.assertIsNone(_selected_order_from_text(
-            ["我需要的", "10", "69", "1,600"],
-            [0.99, 0.99, 0.99, 0.99],
-        ))
+    def test_uses_fixed_game_sides_when_labels_are_not_recognized(self):
+        lines = ["10", "69", "1,600"]
+        scores = [0.99] * len(lines)
+        boxes = np.asarray([box(500, 50), box(150, 50), box(330, 105)])
+
+        order = _selected_order_from_detections(lines, scores, boxes)
+
+        self.assertEqual((order["receive"], order["pay"]), (69, 10))
 
     def test_reads_first_ratio_and_stock_row_from_hovered_ladder(self):
         lines = ["市场比率", "1:6.83", "6", "比率", "库存", "1:6.83", "6", "1:6.85", "60"]
