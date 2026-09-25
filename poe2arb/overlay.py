@@ -956,18 +956,12 @@ class Overlay(QWidget):
         return result
 
     def _ocr_done(self, result):
+        from .ocr import resolve_capture_order
+
         stock_result = result.get("stock_result") or {}
         best_quote = stock_result.get("best_quote")
         self.ocr_stock = stock_result.get("stock")
-        if best_quote:
-            self.ocr_order = {
-                "pay": best_quote["pay"],
-                "receive": best_quote["receive"],
-                "gold": None,
-                "confidence": best_quote["confidence"],
-            }
-        else:
-            self.ocr_order = result.get("selected_order")
+        self.ocr_order = resolve_capture_order(result.get("selected_order"), best_quote)
         text = " | ".join(result["lines"]) or "没有识别到文本"
         self.ocr_text.setText(f"OCR {result['confidence']:.2f}：{text}。请确认方向与实际数量。")
         if self.ocr_order:

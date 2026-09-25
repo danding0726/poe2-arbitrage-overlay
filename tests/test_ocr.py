@@ -5,6 +5,7 @@ import numpy as np
 from poe2arb.ocr import (
     _best_ladder_quote,
     _selected_order_from_detections,
+    resolve_capture_order,
 )
 
 
@@ -92,6 +93,39 @@ class ExchangeOcrTests(unittest.TestCase):
         quote = _best_ladder_quote(lines, scores, boxes)
 
         self.assertEqual((quote["receive"], quote["pay"], quote["stock"]), (6, 41, 6))
+
+    def test_selected_order_is_not_scaled_again_by_a_false_ladder_quote(self):
+        selected = {
+            "receive": 1,
+            "pay": 65,
+            "gold": 160,
+            "confidence": 0.99,
+        }
+        false_ladder = {
+            "receive": 65,
+            "pay": 4225,
+            "stock": 65,
+            "ratio": "1:65",
+            "confidence": 0.99,
+        }
+
+        self.assertIs(resolve_capture_order(selected, false_ladder), selected)
+
+    def test_ladder_quote_remains_a_fallback_when_selected_order_is_missing(self):
+        ladder = {
+            "receive": 6,
+            "pay": 41,
+            "stock": 6,
+            "ratio": "1:6.83",
+            "confidence": 0.98,
+        }
+
+        self.assertEqual(resolve_capture_order(None, ladder), {
+            "receive": 6,
+            "pay": 41,
+            "gold": None,
+            "confidence": 0.98,
+        })
 
 
 if __name__ == "__main__":

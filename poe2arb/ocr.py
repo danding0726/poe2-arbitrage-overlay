@@ -125,6 +125,28 @@ def _best_ladder_quote(lines, scores, boxes) -> dict | None:
     return None
 
 
+def resolve_capture_order(selected_order: dict | None, best_quote: dict | None) -> dict | None:
+    """Prefer the quantities displayed in the selected exchange panel.
+
+    The stock ROI may include the selected panel when it is calibrated too
+    broadly.  In that case its market ratio and a nearby amount can look like a
+    ladder row, and expanding that false "stock" by the ratio changes a shown
+    65 -> 1 order into 4225 -> 65.  The selected panel is the authoritative
+    source for the order the user is actually reviewing; a ladder quote is only
+    a fallback when that panel could not be read at all.
+    """
+    if selected_order:
+        return selected_order
+    if best_quote:
+        return {
+            "pay": best_quote["pay"],
+            "receive": best_quote["receive"],
+            "gold": None,
+            "confidence": best_quote["confidence"],
+        }
+    return None
+
+
 def _parse(lines: list[str], scores: list[float]) -> dict:
     ratios = []
     numbers = []
