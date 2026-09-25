@@ -31,6 +31,11 @@ class HistoricalReferenceTests(unittest.TestCase):
         self.assertEqual(historical_edges([scattered], "Test"), {})
         self.assertEqual(historical_edges([missing], "Test"), {})
 
+    def test_rejects_hourly_pair_when_either_currency_traded_too_little(self):
+        self.assertEqual(historical_edges([market(100, paid=99)], "Test"), {})
+        self.assertEqual(historical_edges([market(100, received=99)], "Test"), {})
+        self.assertIn(("a", "b"), historical_edges([market(100, paid=100, received=100)], "Test"))
+
 
 if __name__ == "__main__":
     unittest.main()

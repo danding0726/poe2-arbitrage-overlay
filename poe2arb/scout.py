@@ -12,12 +12,12 @@ from fractions import Fraction
 from pathlib import Path
 from urllib.parse import quote
 
-from .core import HistoricalEdge
+from .core import HistoricalEdge, MIN_TRADED_UNITS_PER_SIDE
 from .data import app_data_dir
 
 BASE_URL = "https://api.poe2scout.com/poe2/Leagues"
-MAX_AGE_SECONDS = 2 * 3600
-MIN_BOOK_VOLUME = 10_000
+MAX_AGE_SECONDS = 15 * 60
+MIN_BOOK_VOLUME = 100_000
 MIN_TARGET_STOCK = 1_000
 
 
@@ -148,10 +148,13 @@ def scout_edges(snapshot: dict) -> dict[tuple[str, str], HistoricalEdge]:
                 continue
             if int(book.get("volume") or 0) < MIN_BOOK_VOLUME:
                 continue
-            if int(book["va"]) > 0 and Decimal(book["sb"]) >= MIN_TARGET_STOCK:
-                edges[a, b] = HistoricalEdge(a, b, pa / pb, int(book["va"]), 1)
-            if int(book["vb"]) > 0 and Decimal(book["sa"]) >= MIN_TARGET_STOCK:
-                edges[b, a] = HistoricalEdge(b, a, pb / pa, int(book["vb"]), 1)
+            va, vb = int(book["va"]), int(book["vb"])
+            if min(va, vb) < MIN_TRADED_UNITS_PER_SIDE:
+                continue
+            if Decimal(book["sb"]) >= MIN_TARGET_STOCK:
+                edges[a, b] = HistoricalEdge(a, b, pa / pb, va, 1)
+            if Decimal(book["sa"]) >= MIN_TARGET_STOCK:
+                edges[b, a] = HistoricalEdge(b, a, pb / pa, vb, 1)
         except (KeyError, TypeError, ValueError, InvalidOperation, ZeroDivisionError):
             continue
     return edges

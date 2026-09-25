@@ -11,6 +11,7 @@ from typing import Iterable
 # indicative 2% spread on each direction before ranking possible paths.
 REFERENCE_SPREAD = Fraction(50, 51)
 MAX_HOURLY_PRICE_RANGE = Fraction(3, 2)
+MIN_TRADED_UNITS_PER_SIDE = 100
 
 
 @dataclass(frozen=True)
@@ -51,7 +52,7 @@ def historical_edges(markets: Iterable[dict], league: str) -> dict[tuple[str, st
                       Fraction(int(high[b]), int(high[a])))
         except (KeyError, TypeError, ValueError, ZeroDivisionError):
             continue
-        if va <= 0 or vb <= 0 or min(prices) <= 0:
+        if min(va, vb) < MIN_TRADED_UNITS_PER_SIDE or min(prices) <= 0:
             continue
         if hour is not None and (min(prices) == max(prices)
                                  or max(prices) / min(prices) > MAX_HOURLY_PRICE_RANGE):
