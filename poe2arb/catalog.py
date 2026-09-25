@@ -52,6 +52,7 @@ def icon_file(item_id: str) -> Path | None:
     return path if path.is_file() else None
 
 
+@lru_cache(maxsize=4096)
 def item_pixmap(item_id: str, size: int = 24) -> QPixmap:
     path = icon_file(item_id)
     if path:
@@ -73,5 +74,6 @@ def item_pixmap(item_id: str, size: int = 24) -> QPixmap:
     return pix
 
 
+@lru_cache(maxsize=4096)
 def item_icon(item_id: str, size: int = 24) -> QIcon:
     return QIcon(item_pixmap(item_id, size))
