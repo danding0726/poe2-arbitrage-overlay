@@ -219,7 +219,7 @@ def read_exchange_panel(data: bytes) -> dict:
 
 
 def read_stock_region(data: bytes) -> dict:
-    """Read the best ratio/stock row, or a region containing one stock integer.
+    """Read visible ratio/stock levels, or a region containing one stock integer.
 
     A separate calibration is required because the hovered market ladder moves
     with the exchange UI. A single-number region remains supported as fallback.
