@@ -21,7 +21,7 @@ jobs:
       - name: Test
         run: python -m unittest discover -s tests -v
       - name: Package
-        run: pyinstaller --noconfirm --clean --windowed --onedir --name PoE2ArbDesk --collect-all rapidocr --collect-all onnxruntime --add-data "poe2arb\demo.json;poe2arb" --add-data "poe2arb\catalog.json;poe2arb" --add-data "poe2arb\icons;poe2arb\icons" main.py
+        run: pyinstaller --noconfirm --clean --windowed --onedir --name PoE2ArbDesk --collect-all rapidocr --collect-all onnxruntime --add-data "poe2arb\catalog.json;poe2arb" --add-data "poe2arb\icons;poe2arb\icons" main.py
       - name: Smoke test packaged EXE
         shell: pwsh
         run: |

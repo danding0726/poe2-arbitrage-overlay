@@ -19,7 +19,6 @@ BASE_URL = "https://api.poe2scout.com/poe2/Leagues"
 MAX_AGE_SECONDS = 2 * 3600
 MIN_BOOK_VOLUME = 10_000
 MIN_TARGET_STOCK = 1_000
-MAX_REFERENCE_GAIN = Fraction(1, 2)
 
 
 def _get_json(url: str):
@@ -156,12 +155,3 @@ def scout_edges(snapshot: dict) -> dict[tuple[str, str], HistoricalEdge]:
         except (KeyError, TypeError, ValueError, InvalidOperation, ZeroDivisionError):
             continue
     return edges
-
-
-def scout_candidates(snapshot: dict, limit: int = 80):
-    """Rank plausible leads only; large book disagreements need separate inspection."""
-    from .roundtrip import find_single_item_candidates
-
-    candidates = find_single_item_candidates(scout_edges(snapshot), limit=10_000)
-    return [row for row in candidates
-            if 0 < row.reference_gain <= MAX_REFERENCE_GAIN][:limit]

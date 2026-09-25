@@ -44,14 +44,6 @@ def item_name(item_id: str) -> str:
     return re.sub(r"^Currency ", "", name)
 
 
-def item_tooltip(item_id: str) -> str:
-    entry = record(item_id)
-    localized, english = item_name(item_id), entry.get("en")
-    heading = localized if not english or english == localized else f"{localized} · {english}"
-    description = entry.get("description")
-    return "\n".join(x for x in (heading, description, item_id) if x)
-
-
 def icon_file(item_id: str) -> Path | None:
     relative = record(item_id).get("icon")
     if not relative:

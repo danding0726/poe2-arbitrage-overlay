@@ -1,13 +1,9 @@
 # Verification record
 
-- 2026-09-23 hourly-route correction: 32 unit tests and `main.py --self-test` passed. A live GGG 05:00 UTC page was compared with lilmarket's 05:00 UTC Forbidden Rites snapshot. The scanner now uses one hour's VWAP, divides each leg's reference price by 1.02 for an assumed fill spread, and rejects one-sided or scattered hourly ranges. For lilmarket's top four-trade route (Armourer's Scrap → Divine Orb → Vaal Orb → Exalted Orb → Armourer's Scrap), the local continuous reference gap was +45.4% versus the site's +45.5% raw gap. With 90 starting scraps and floor rounding after every leg, both produce 1 Divine Orb → 82 Vaal Orbs → 546 Exalted Orbs → 129 Armourer's Scraps, or +39 scraps (+43.3%) before live order confirmation. The route ranks first locally when the start is Armourer's Scrap, the input is 90, and four trades are selected. Candidate ranking now screens against the user's starting amount and includes every connected currency. Other rankings can still differ because lilmarket uses additional liquidity, consensus, minimum-profitable-lot, and gold-cost filters.
-
-- `python -m unittest discover -s tests -v`: 13 tests passed. Coverage includes historical cycle discovery, integer lot sizing, shared quote reuse, expiry, stock checks, stock OCR rejection of ratios, and Poe2Scout independent-book filtering.
-- `python main.py --self-test`: loaded the bundled demo, item catalog, icon, and local RapidOCR models.
-- GGG PoE2 Currency Exchange history API: fetched two pages and parsed 5,828 market records; generated three- and four-step historical candidates.
-- Poe2Scout `Leagues`, `ExchangeSnapshot`, and `SnapshotPairs`: live requests succeeded. On 2026-09-23 UTC, the current standard league was `Forbidden Rites`. The response held 1,633 raw pairs, consolidated to 1,364 exact item-ID pairs. The snapshot was about 82 minutes old when read. The liquidity and gain filters generated 80 displayed cross-currency candidates. This is not a second-by-second executable order book.
-- User-provided 1920×1080 screenshot without inventory: OCR in the default region `[588, 160, 1328, 345]` read pay 1, receive 21, and gold fee 11,760 from the selected trade. The lower listing was excluded.
-- PySide6 offscreen window: rendered the expanded checklist, historical routes, round-trip mode, and Poe2Scout cross-currency mode. A cached Scout snapshot showed the league, snapshot age, and 80 candidates. A three-order demo produced the expected minimum integer lot counts and profit.
-- macOS PyInstaller `--onedir --windowed` smoke build and bundled `--self-test` passed. This is not a Windows EXE validation.
-
-The Windows build script and GitHub Actions workflow are configured. A Windows game session is still needed to calibrate the stock OCR region and verify screenshot permissions, global hotkeys, and borderless-window overlay behavior. Actual market prices and stock may change between reading and trading.
+- The app entry point is `main.py → poe2arb.dashboard.run`. The retired multi-route overlay, checklist, round-trip module, and demo feed are no longer packaged.
+- `poe2arb.single_item` computes one item's A→item→B→A path using three independently read, directed quotes. Tests cover whole-order sizing, stock bounds, quote expiry, and exact-order gold handling.
+- `poe2arb.core` retains only the published hourly reference parser used to rank items for inspection. Tests cover the latest-hour selection and rejection of missing, one-sided, or scattered price ranges.
+- Qt offscreen dashboard smoke testing checks the single-page quote flow, currency/item icon rendering, profit result, and saved quote restoration.
+- On 2026-09-25, `python -m unittest discover -s tests -v` passed 28 tests and `python main.py --self-test` passed.
+- The Windows PyInstaller `--onedir --windowed` build completed after removing the demo asset. The resulting EXE loaded the bundled RapidOCR models with `--self-test`.
+- Windows game-session verification is still needed for screenshot calibration, OCR against live exchange panels, foreground rendering, and actual gold fees at the planned quantity. The app does not place trades.
