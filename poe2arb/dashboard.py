@@ -28,6 +28,8 @@ from .single_item import (CHAOS, CORE, DIVINE, EXALTED, MAX_QUOTE_AGE, Quote,
                           normalize_quote_amounts)
 from .trade_log import ROLES, Trade, summarize_trades, trade_gold
 
+MAX_HOURLY_LEAD_AGE_SECONDS = 2 * 3600
+
 
 def settings_path() -> Path:
     return app_data_dir() / "dashboard_settings.json"
@@ -478,6 +480,7 @@ class Dashboard(QWidget):
         self.capture_role: str | None = None
         self.region_selector: RegionSelector | None = None
         self.selected_item: str | None = None
+        self._active_lead_source = "none"
         self._build()
         self._style()
         self._load_leagues()
@@ -493,6 +496,9 @@ class Dashboard(QWidget):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(1000)
+        self.scout_timer = QTimer(self)
+        self.scout_timer.timeout.connect(self.update_scout)
+        self.scout_timer.start(5 * 60 * 1000)
         QTimer.singleShot(100, self.update_history)
         QTimer.singleShot(300, self.update_scout)
 
@@ -526,7 +532,7 @@ class Dashboard(QWidget):
         self.status.setObjectName("muted")
         header.addWidget(self.status)
         refresh = QPushButton("刷新历史线索")
-        refresh.clicked.connect(self.update_history)
+        refresh.clicked.connect(self.refresh_leads)
         header.addWidget(refresh)
         root.addLayout(header)
 
@@ -568,7 +574,7 @@ class Dashboard(QWidget):
         search.addWidget(self._section("交易物品"))
         self.item_select = QComboBox()
         self.item_select.setMinimumWidth(240)
-        self.item_select.setMaximumWidth(360)
+        self.item_select.setMaximumWidth(480)
         self.item_select.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.item_select.setMinimumContentsLength(16)
@@ -589,7 +595,8 @@ class Dashboard(QWidget):
         self.item_results.hide()
         root.addWidget(self.item_results)
         suggestion_row = QHBoxLayout()
-        suggestion_row.addWidget(QLabel("历史线索 · 点击即选"))
+        self.suggestion_label = QLabel("历史线索 · 点击即选")
+        suggestion_row.addWidget(self.suggestion_label)
         self.suggestions = []
         for _ in range(3):
             button = QPushButton()
@@ -910,6 +917,10 @@ class Dashboard(QWidget):
         self.status.setText("正在更新小时历史…")
         self._job(sync_recent, self._history_done)
 
+    def refresh_leads(self):
+        self.update_history()
+        self.update_scout()
+
     def _history_done(self, snapshot):
         self.snapshot = snapshot
         self._load_leagues()
@@ -918,14 +929,26 @@ class Dashboard(QWidget):
 
     def update_scout(self):
         league = self.league.currentText() or None
+        if any(job.function is fetch_scout_snapshot and job.args == (league,)
+               for job in self.jobs):
+            return
         self._job(fetch_scout_snapshot, self._scout_done, league)
 
     def _scout_done(self, snapshot):
+        if self.league.currentText() and snapshot["league"] != self.league.currentText():
+            QTimer.singleShot(0, self.update_scout)
+            return
         self.scout_snapshot = snapshot
         self._load_leagues()
-        if not self.settings.get("league") and not self.quotes:
-            self.league.setCurrentText(snapshot["league"])
         self._update_suggestions()
+        age = snapshot_age(snapshot)
+        if 0 <= age <= MAX_AGE_SECONDS:
+            message = f"Scout 快照 {age_text(age)}前"
+        elif self._recent_history_hour() is not None:
+            message = f"Scout 快照已过期（{age_text(age)}前），改用小时历史"
+        else:
+            message = f"Scout 快照已过期（{age_text(age)}前），暂无近期线索"
+        self.status.setText(message)
 
     def _league_changed(self):
         self.quotes.clear()
@@ -934,6 +957,7 @@ class Dashboard(QWidget):
         self._save_settings()
         self._update_suggestions()
         self._route_changed()
+        QTimer.singleShot(0, self.update_scout)
 
     def _stock_mode_changed(self):
         self._save_settings()
@@ -1070,14 +1094,50 @@ class Dashboard(QWidget):
             parts.append(f"每百万金币 {'净收益' if summary.settled else '估值收益'} {efficiency:+,.1f} {item_name(start)}")
         self.trade_balances.setText(" · ".join(parts))
 
+    def _scout_is_recent(self, now: int | None = None) -> bool:
+        return bool(
+            self.scout_snapshot
+            and self.scout_snapshot.get("league") == self.league.currentText()
+            and 0 <= snapshot_age(self.scout_snapshot, now) <= MAX_AGE_SECONDS
+        )
+
+    def _recent_history_hour(self, now: int | None = None) -> int | None:
+        hour = latest_market_hour(self.snapshot.get("markets", []), self.league.currentText())
+        if hour is None:
+            return None
+        current = now if now is not None else int(time.time())
+        return hour if 0 <= current - hour <= MAX_HOURLY_LEAD_AGE_SECONDS else None
+
+    def _lead_source(self, now: int | None = None) -> str:
+        if self._scout_is_recent(now):
+            return "scout"
+        if self._recent_history_hour(now) is not None:
+            return "history"
+        return "none"
+
     def _edges(self):
-        league = self.league.currentText()
-        if (self.scout_snapshot and self.scout_snapshot.get("league") == league
-                and 0 <= snapshot_age(self.scout_snapshot) <= MAX_AGE_SECONDS):
+        source = self._lead_source()
+        if source == "scout":
             return scout_edges(self.scout_snapshot)
-        return historical_edges(self.snapshot.get("markets", []), league)
+        if source == "history":
+            return historical_edges(self.snapshot.get("markets", []), self.league.currentText())
+        return {}
+
+    def _update_lead_source_label(self, now: int):
+        if self._active_lead_source == "scout":
+            source = f"Scout 快照 {age_text(snapshot_age(self.scout_snapshot, now))}前"
+        elif self._active_lead_source == "history":
+            hour = latest_market_hour(self.snapshot.get("markets", []), self.league.currentText())
+            source = f"小时历史 {age_text(max(0, now - hour))}前" if hour else "暂无近期数据"
+        else:
+            source = "暂无近期数据"
+        label = f"历史线索 · {source} · 点击即选"
+        if self.suggestion_label.text() != label:
+            self.suggestion_label.setText(label)
 
     def _update_suggestions(self):
+        self._active_lead_source = self._lead_source()
+        self._update_lead_source_label(int(time.time()))
         edges = self._edges()
         scores = []
         for item in {target for source, target in edges if target not in CORE}:
@@ -1089,7 +1149,10 @@ class Dashboard(QWidget):
         visible_scores = scores[:len(self.suggestions)]
         for button, recommendation in zip(self.suggestions, visible_scores):
             gain, item, start, exit_currency = recommendation
-            button.setText(f"{item_name(item)} · {float(gain):+.1%}")
+            button.setText(
+                f"{item_name(item)} · {item_name(start)}买→{item_name(exit_currency)}卖 · "
+                f"{float(gain):+.1%}"
+            )
             button.setIcon(item_icon(item))
             button.setToolTip(
                 f"历史线索：{item_name(start)} → {item_name(item)} → "
@@ -1105,16 +1168,20 @@ class Dashboard(QWidget):
         self._update_reference()
 
     def _populate_item_select(self, scores: list[tuple]):
-        leads = {item: gain for gain, item, _, _ in scores}
+        leads = {item: (gain, start, exit_currency)
+                 for gain, item, start, exit_currency in scores}
         items = [item for item in catalog() if item not in CORE]
-        items.sort(key=lambda item: (-leads.get(item, Fraction(-1)), item_name(item)))
+        items.sort(key=lambda item: (-leads[item][0] if item in leads else Fraction(1),
+                                     item_name(item)))
         self.item_select.blockSignals(True)
         self.item_select.clear()
         self.item_select.addItem("按历史线索选择物品…", None)
         for item in items:
             label = item_name(item)
             if item in leads:
-                label += f" · 历史线索 {float(leads[item]):+.1%}"
+                gain, start, exit_currency = leads[item]
+                label += (f" · {item_name(start)}买→{item_name(exit_currency)}卖"
+                          f" · 参考 {float(gain):+.1%}")
             self.item_select.addItem(item_icon(item), label, item)
         index = self.item_select.findData(self.selected_item)
         self.item_select.setCurrentIndex(max(0, index))
@@ -1140,9 +1207,7 @@ class Dashboard(QWidget):
         if not selected:
             return
         item, start, exit_currency = selected
-        self.select_item(item)
-        self.start_select.setCurrentIndex(self.start_select.findData(start))
-        self.exit_select.setCurrentIndex(self.exit_select.findData(exit_currency))
+        self.select_item(item, (start, exit_currency))
 
     def _filter_items(self, query: str):
         self.item_results.clear()
@@ -1172,9 +1237,13 @@ class Dashboard(QWidget):
     def _choose_item_result(self, entry: QListWidgetItem):
         self.select_item(entry.data(Qt.ItemDataRole.UserRole))
 
-    def select_item(self, item: str):
+    def select_item(self, item: str, route: tuple[str, str] | None = None):
         if item not in catalog() or item in CORE:
             return
+        if route is None:
+            paths = indicative_paths(self._edges(), item)
+            if paths and paths[0][2] > 0:
+                route = paths[0][:2]
         self.selected_item = item
         self.recent_items = [item] + [saved for saved in self.recent_items if saved != item][:4]
         self._update_recent_buttons()
@@ -1186,6 +1255,14 @@ class Dashboard(QWidget):
         self.item_search.setText(item_name(item))
         self.item_results.clear()
         self.item_results.hide()
+        if route is not None:
+            for selector, currency in ((self.start_select, route[0]),
+                                       (self.exit_select, route[1])):
+                index = selector.findData(currency)
+                if index >= 0:
+                    selector.blockSignals(True)
+                    selector.setCurrentIndex(index)
+                    selector.blockSignals(False)
         self._update_reference()
         self._route_changed()
 
@@ -1193,14 +1270,12 @@ class Dashboard(QWidget):
         if not self.selected_item:
             self.reference.setText("选择物品后显示历史线索")
             return
+        if self._lead_source() == "none":
+            self.reference.setText("近期行情已过期，暂不推荐历史线索；请刷新后再查看")
+            return
         paths = indicative_paths(self._edges(), self.selected_item)
         hour = latest_market_hour(self.snapshot.get("markets", []), self.league.currentText())
-        scout_current = (
-            self.scout_snapshot
-            and self.scout_snapshot.get("league") == self.league.currentText()
-            and 0 <= snapshot_age(self.scout_snapshot) <= MAX_AGE_SECONDS
-        )
-        source = "Scout 快照" if scout_current else "小时历史"
+        source = "Scout 快照" if self._scout_is_recent() else "小时历史"
         if paths:
             start, exit_currency, gain = paths[0]
             self.reference.setText(f"{source}线索：{item_name(start)}买 → {item_name(exit_currency)}卖，参考 {float(gain):+.1%}；需实时核价")
@@ -1464,6 +1539,9 @@ class Dashboard(QWidget):
         if not hasattr(self, "rows"):
             return
         now = now or int(time.time())
+        if self._active_lead_source != self._lead_source(now):
+            self._update_suggestions()
+        self._update_lead_source_label(now)
         references = self._edges()
         for card in self.rate_cards:
             card.refresh(self.quotes, references, now, self.depth_books)

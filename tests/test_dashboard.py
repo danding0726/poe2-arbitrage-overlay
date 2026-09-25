@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+import time
 import unittest
 from fractions import Fraction
 from pathlib import Path
@@ -63,19 +64,31 @@ class DashboardTests(unittest.TestCase):
                     edges = {
                         (EXALTED, first): HistoricalEdge(EXALTED, first, Fraction(2), 1000, 1),
                         (first, DIVINE): HistoricalEdge(first, DIVINE, Fraction(1), 1000, 1),
-                        (EXALTED, second): HistoricalEdge(EXALTED, second, Fraction(3, 2), 1000, 1),
-                        (second, DIVINE): HistoricalEdge(second, DIVINE, Fraction(1), 1000, 1),
+                        (CHAOS, second): HistoricalEdge(CHAOS, second, Fraction(3, 2), 1000, 1),
+                        (second, EXALTED): HistoricalEdge(second, EXALTED, Fraction(1), 1000, 1),
                         (DIVINE, EXALTED): HistoricalEdge(DIVINE, EXALTED, Fraction(1), 1000, 1),
+                        (EXALTED, CHAOS): HistoricalEdge(EXALTED, CHAOS, Fraction(1), 1000, 1),
                     }
                     with patch.object(window, "_edges", return_value=edges):
                         window._update_suggestions()
-                    self.assertEqual(window.item_select.itemData(1), first)
-                    self.assertEqual(window.item_select.itemData(2), second)
-                    window.item_select.setCurrentIndex(1)
-                    self.assertEqual(window.selected_item, first)
-                    window.select_item(second)
-                    self.assertEqual(window.recent_items[:2], [second, first])
-                    self.assertEqual(window.recent_buttons[0].property("recent_item"), second)
+                        self.assertEqual(window.item_select.itemData(1), first)
+                        self.assertEqual(window.item_select.itemData(2), second)
+                        self.assertIn("买→", window.item_select.itemText(1))
+                        self.assertIn("卖", window.suggestions[0].text())
+                        window.item_select.setCurrentIndex(1)
+                        self.assertEqual(window.selected_item, first)
+                        self.assertEqual((window.start_select.currentData(), window.exit_select.currentData()),
+                                         (EXALTED, DIVINE))
+                        window.item_select.setCurrentIndex(2)
+                        self.assertEqual((window.start_select.currentData(), window.exit_select.currentData()),
+                                         (CHAOS, EXALTED))
+                        self.assertEqual(window.recent_items[:2], [second, first])
+                        self.assertEqual(window.recent_buttons[0].property("recent_item"), second)
+                        window.start_select.setCurrentIndex(window.start_select.findData(DIVINE))
+                        self.assertEqual(window.start_select.currentData(), DIVINE)
+                        window.suggestions[1].click()
+                        self.assertEqual((window.start_select.currentData(), window.exit_select.currentData()),
+                                         (CHAOS, EXALTED))
                 finally:
                     window.close()
                 restored = Dashboard()
@@ -93,6 +106,8 @@ class DashboardTests(unittest.TestCase):
                 window = Dashboard()
                 try:
                     window.select_item("Metadata/Items/Currency/CurrencyCorrupt")
+                    window.start_select.setCurrentIndex(window.start_select.findData(EXALTED))
+                    window.exit_select.setCurrentIndex(window.exit_select.findData(DIVINE))
                     window.resize(1000, 800)
                     self.app.processEvents()
                     scroll = window.findChild(QScrollArea)
@@ -365,9 +380,46 @@ class DashboardTests(unittest.TestCase):
                     window.quotes[pair] = Quote(*pair, 30, 2, 10, 100)
                     with (patch("poe2arb.dashboard.leagues", return_value=["旧联赛", "新联赛"]),
                           patch.object(window, "_update_suggestions")):
-                        window._scout_done({"league": "新联赛"})
+                        window._scout_done({"league": "新联赛", "epoch": int(time.time())})
                     self.assertEqual(window.league.currentText(), "旧联赛")
                     self.assertIn(pair, window.quotes)
+                finally:
+                    window.close()
+
+    def test_scout_leads_expire_and_refresh_both_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with (patch("poe2arb.dashboard.settings_path", return_value=Path(directory) / "settings.json"),
+                  patch("poe2arb.dashboard.QTimer.singleShot")):
+                window = Dashboard()
+                try:
+                    self.assertEqual(window.scout_timer.interval(), 5 * 60 * 1000)
+                    with (patch.object(window, "update_history") as update_history,
+                          patch.object(window, "update_scout") as update_scout):
+                        window.refresh_leads()
+                    update_history.assert_called_once_with()
+                    update_scout.assert_called_once_with()
+
+                    league = window.league.currentText()
+                    window.snapshot = {"markets": [
+                        {"league": league, "_hour_id": int(time.time()) - 60},
+                    ]}
+                    window.scout_snapshot = {
+                        "league": league, "epoch": int(time.time()) - 14 * 60, "pairs": [],
+                    }
+                    window._update_suggestions()
+                    self.assertIn("Scout 快照", window.suggestion_label.text())
+                    with patch("poe2arb.dashboard.snapshot_age", return_value=16 * 60):
+                        window.refresh()
+                    self.assertIn("小时历史", window.suggestion_label.text())
+                    self.assertNotEqual(window._active_lead_source, "scout")
+
+                    window.scout_snapshot = None
+                    window.snapshot = {"markets": [
+                        {"league": league, "_hour_id": int(time.time()) - 2 * 3600 - 1},
+                    ]}
+                    window._update_suggestions()
+                    self.assertEqual(window._active_lead_source, "none")
+                    self.assertIn("暂无近期数据", window.suggestion_label.text())
                 finally:
                     window.close()
 
