@@ -5,14 +5,44 @@ from __future__ import annotations
 from dataclasses import dataclass
 from fractions import Fraction
 from math import gcd
+import re
 
 
 EXALTED = "Metadata/Items/Currency/CurrencyAddModToRare"
 DIVINE = "Metadata/Items/Currency/CurrencyModValues"
 CHAOS = "Metadata/Items/Currency/CurrencyRerollRare"
 CORE = (EXALTED, DIVINE, CHAOS)
-MAX_QUOTE_AGE = 45
-MAX_OBSERVATION_GAP = 25
+DEFAULT_CORE_GOLD = {EXALTED: 120, CHAOS: 160, DIVINE: 800}
+MAX_QUOTE_AGE = 180
+MAX_OBSERVATION_GAP = 180
+
+
+def core_gold_cost(target: str, receive: int) -> int:
+    """Fixed gold cost for receiving a core currency."""
+    return receive * DEFAULT_CORE_GOLD[target]
+
+
+def item_unit_gold(order_gold: int | None, receive: int) -> int | None:
+    """Convert a captured whole-order fee to a per-item fee when exact."""
+    if order_gold is None or receive <= 0 or order_gold < 0:
+        return None
+    return order_gold // receive if order_gold % receive == 0 else None
+
+
+def normalize_quote_amounts(pay_text: str, receive_text: str) -> tuple[int, int, bool]:
+    """Convert a decimal ratio to its smallest whole order; keep integer orders exact."""
+    pay_text = pay_text.strip().replace(",", "")
+    receive_text = receive_text.strip().replace(",", "")
+    if not all(re.fullmatch(r"\d+(?:\.\d+)?", value) for value in (pay_text, receive_text)):
+        raise ValueError("支付和获得请填写正数，可使用小数点")
+    pay, receive = Fraction(pay_text), Fraction(receive_text)
+    if pay <= 0 or receive <= 0:
+        raise ValueError("支付和获得必须大于 0")
+    normalized = "." in pay_text or "." in receive_text
+    if normalized:
+        ratio = pay / receive
+        return ratio.numerator, ratio.denominator, True
+    return int(pay), int(receive), False
 
 
 @dataclass(frozen=True)
@@ -21,15 +51,15 @@ class Quote:
     target: str
     pay: int
     receive: int
-    stock: int
+    stock: int | None
     observed_at: int
-    gold: int | None = None
+    gold: int | None = None  # Per received item; ignored for core-currency targets.
 
     def validate(self) -> None:
         if not self.source or not self.target or self.source == self.target:
             raise ValueError("交易方向无效")
-        if min(self.pay, self.receive, self.stock) <= 0 or self.receive > self.stock:
-            raise ValueError("支付、获得和库存必须是有效正整数")
+        if min(self.pay, self.receive) <= 0 or (self.stock is not None and self.stock <= 0):
+            raise ValueError("支付、获得和已填库存必须是有效正整数")
         if self.gold is not None and self.gold < 0:
             raise ValueError("金币不能为负")
 
@@ -56,6 +86,10 @@ class Opportunity:
     exact_gold: int | None
 
     @property
+    def is_fresh(self) -> bool:
+        return self.oldest_age <= MAX_QUOTE_AGE and self.observation_gap <= MAX_OBSERVATION_GAP
+
+    @property
     def profit(self) -> int:
         return self.final_amount - self.start_amount
 
@@ -70,7 +104,8 @@ class Opportunity:
         return Fraction(self.profit * 1_000_000, self.exact_gold)
 
 
-def evaluate(buy: Quote, sell: Quote, convert: Quote, *, now: int) -> Opportunity:
+def evaluate(buy: Quote, sell: Quote, convert: Quote, *, now: int,
+             require_fresh: bool = True, require_stock: bool = True) -> Opportunity:
     """Find the smallest residue-free A→item→B→A exchange."""
     for quote in (buy, sell, convert):
         quote.validate()
@@ -81,10 +116,10 @@ def evaluate(buy: Quote, sell: Quote, convert: Quote, *, now: int) -> Opportunit
     times = (buy.observed_at, sell.observed_at, convert.observed_at)
     age = max(0, now - min(times))
     gap = max(times) - min(times)
-    if age > MAX_QUOTE_AGE:
-        raise ValueError("有报价超过 45 秒，请重新读取")
-    if gap > MAX_OBSERVATION_GAP:
-        raise ValueError("三条报价读取间隔超过 25 秒，请重新读取")
+    if require_fresh and age > MAX_QUOTE_AGE:
+        raise ValueError("有报价超过 3 分钟，请重新读取")
+    if require_fresh and gap > MAX_OBSERVATION_GAP:
+        raise ValueError("三条报价读取间隔超过 3 分钟，请重新读取")
 
     buy_lots = sell.pay // gcd(buy.receive, sell.pay)
     sell_lots = buy.receive * buy_lots // sell.pay
@@ -94,16 +129,20 @@ def evaluate(buy: Quote, sell: Quote, convert: Quote, *, now: int) -> Opportunit
     convert_lots = sell.receive * sell_lots // convert.pay
 
     max_rounds = min(
-        buy.stock // (buy.receive * buy_lots),
-        sell.stock // (sell.receive * sell_lots),
-        convert.stock // (convert.receive * convert_lots),
+        quote.stock // needed if quote.stock is not None else 0
+        for quote, needed in (
+            (buy, buy.receive * buy_lots),
+            (sell, sell.receive * sell_lots),
+            (convert, convert.receive * convert_lots),
+        )
     )
-    if max_rounds < 1:
-        raise ValueError("当前库存无法完成一轮整数交易")
-    counts = (buy_lots, sell_lots, convert_lots)
-    gold = sum(q.gold for q in (buy, sell, convert)) if all(
-        count == 1 and q.gold is not None for q, count in zip((buy, sell, convert), counts)
-    ) else None
+    if require_stock and max_rounds < 1:
+        raise ValueError("当前库存未录齐或无法完成一轮整数交易")
+    gold = None
+    if buy.gold is not None:
+        gold = (buy.receive * buy_lots * buy.gold
+                + core_gold_cost(sell.target, sell.receive * sell_lots)
+                + core_gold_cost(convert.target, convert.receive * convert_lots))
     return Opportunity(
         item=buy.target, start=buy.source, exit_currency=sell.target,
         buy_lots=buy_lots, sell_lots=sell_lots, convert_lots=convert_lots,
