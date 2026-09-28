@@ -9,7 +9,8 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QBoxLayout, QLabel, QPushButton, QScrollArea
+from PySide6.QtWidgets import (QApplication, QBoxLayout, QLabel, QLineEdit, QPushButton,
+                               QScrollArea)
 from PySide6.QtTest import QTest
 
 from poe2arb.catalog import catalog
@@ -334,6 +335,50 @@ class DashboardTests(unittest.TestCase):
                     self.assertEqual(len(restored.trades), 2)
                 finally:
                     restored.close()
+
+    def test_recommended_route_adds_editable_and_duplicable_trade_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with (patch("poe2arb.dashboard.settings_path", return_value=Path(directory) / "settings.json"),
+                  patch("poe2arb.dashboard.QTimer.singleShot")):
+                window = Dashboard()
+                try:
+                    item = "Metadata/Items/Currency/CurrencyCorrupt"
+                    window.select_item(item)
+                    for role, values in (
+                        ("买入", (30, 2, 10, 50)),
+                        ("卖出", (2, 1, 4, None)),
+                        ("换回", (1, 35, 200, None)),
+                    ):
+                        row = window.rows[role]
+                        for field, value in zip((row.pay, row.receive, row.stock, row.gold), values):
+                            field.setText("" if value is None else str(value))
+                        window._save_row(row)
+
+                    self.assertTrue(window.add_recommended_route.isEnabled())
+                    window.add_recommended_route.click()
+                    self.assertEqual(window.trade_list.count(), 3)
+                    self.assertEqual([(trade.role, trade.pay, trade.receive)
+                                      for trade in window.trades],
+                                     [("买入", 30, 2), ("卖出", 2, 1), ("换回", 1, 35)])
+
+                    first_item = window.trade_list.item(0)
+                    editor = window.trade_list.itemWidget(first_item)
+                    fields = editor.findChildren(QLineEdit)
+                    self.assertEqual([field.text() for field in fields], ["1", "35"])
+                    icons = [label for label in editor.findChildren(QLabel)
+                             if label.pixmap() is not None and not label.pixmap().isNull()]
+                    self.assertEqual(len(icons), 2)
+                    fields[1].setText("34")
+                    fields[1].editingFinished.emit()
+                    self.assertEqual(window.trades[2].receive, 34)
+
+                    window._duplicate_trade_at(2)
+                    self.assertEqual(window.trade_list.count(), 4)
+                    self.assertEqual((window.trades[-1].pay, window.trades[-1].receive), (1, 34))
+                    window._remove_trade_at(3)
+                    self.assertEqual(window.trade_list.count(), 3)
+                finally:
+                    window.close()
 
     def test_single_page_recalculates_from_three_independent_quotes(self):
         with tempfile.TemporaryDirectory() as directory:

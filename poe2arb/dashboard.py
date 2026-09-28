@@ -10,7 +10,7 @@ from dataclasses import asdict, replace
 from fractions import Fraction
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QRect, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QBoxLayout, QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
@@ -519,6 +519,7 @@ class Dashboard(QWidget):
         self._ocr_last_signature: tuple[int, ...] | None = None
         self.region_selector: RegionSelector | None = None
         self.selected_item: str | None = None
+        self._recommended_route: list[tuple[str, tuple[str, str], int, int]] = []
         self._active_lead_source = "none"
         self._build()
         self._style()
@@ -1262,6 +1263,82 @@ class Dashboard(QWidget):
             field.setText(str(value) if value is not None else "")
         self.trade_status.setText("已带入报价；请按游戏实际成交数量核对，再点击记录。")
 
+    def _set_recommended_route(self, route: list[tuple[str, tuple[str, str], int, int]]):
+        self._recommended_route = route
+        self.add_recommended_route.setEnabled(bool(route))
+
+    def _add_recommended_route(self):
+        if not self._recommended_route or not self.selected_item:
+            self.trade_status.setText("当前没有可加入的盈利推荐路线。")
+            return
+        now = int(time.time())
+        additions = []
+        try:
+            for role, pair, pay, receive in self._recommended_route:
+                gold = None
+                if pair[1] not in CORE:
+                    quote = self.quotes.get(pair)
+                    if quote is not None and quote.gold is not None:
+                        gold = receive * quote.gold
+                trade = Trade(
+                    self.league.currentText(), self.selected_item,
+                    self.start_select.currentData(), self.exit_select.currentData(),
+                    role, *pair, pay, receive, gold, now,
+                )
+                trade.validate()
+                additions.append(trade)
+        except ValueError as exc:
+            self.trade_status.setText(f"推荐路线无法加入：{exc}")
+            return
+        self.trades.extend(additions)
+        self._save_settings()
+        self._trade_list_key = None
+        self.trade_status.setText(
+            "推荐路线已加入；可直接修改每笔支付与获得，分批成交时复制对应记录。")
+        self._refresh_trades(now)
+
+    def _update_trade(self, index: int, pay_field: QLineEdit, receive_field: QLineEdit):
+        if not 0 <= index < len(self.trades):
+            return
+        try:
+            pay = int(pay_field.text().strip().replace(",", ""))
+            receive = int(receive_field.text().strip().replace(",", ""))
+            original = self.trades[index]
+            gold = None
+            if original.target not in CORE:
+                quote = self.quotes.get((original.source, original.target))
+                if quote is not None and quote.gold is not None:
+                    gold = receive * quote.gold
+            updated = replace(original, pay=pay, receive=receive, gold=gold,
+                              observed_at=int(time.time()))
+            updated.validate()
+        except ValueError as exc:
+            self.trade_status.setText(f"实际成交无效：{exc}")
+            return
+        self.trades[index] = updated
+        self._save_settings()
+        self._trade_list_key = None
+        self.trade_status.setText("交易数量已更新。")
+        self._refresh_trades(int(time.time()))
+
+    def _duplicate_trade_at(self, index: int):
+        if not 0 <= index < len(self.trades):
+            return
+        self.trades.append(replace(self.trades[index], observed_at=int(time.time())))
+        self._save_settings()
+        self._trade_list_key = None
+        self.trade_status.setText("已复制交易记录；请按本次真实成交修改数量。")
+        self._refresh_trades(int(time.time()))
+
+    def _duplicate_trade(self):
+        selected = self.trade_list.currentItem()
+        if selected is None:
+            self.trade_status.setText("请先选中一条交易记录。")
+            return
+        index = selected.data(Qt.ItemDataRole.UserRole)
+        if isinstance(index, int):
+            self._duplicate_trade_at(index)
+
     def _record_trade(self):
         role = self.trade_role.currentData()
         row = self.rows[role]
@@ -1298,10 +1375,81 @@ class Dashboard(QWidget):
         index = selected.data(Qt.ItemDataRole.UserRole)
         if not isinstance(index, int) or not 0 <= index < len(self.trades):
             return
+        self._remove_trade_at(index)
+
+    def _remove_trade_at(self, index: int):
+        if not 0 <= index < len(self.trades):
+            return
         del self.trades[index]
         self._save_settings()
+        self._trade_list_key = None
         self.trade_status.setText("已删除选中的交易记录。")
         self._refresh_trades(int(time.time()))
+
+    def _trade_item_widget(self, index: int, trade: Trade,
+                           item_fees: dict[str, int]) -> QWidget:
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(6, 3, 4, 3)
+        layout.setSpacing(5)
+        role = QLabel(trade.role)
+        role.setObjectName("rowTitle")
+        role.setFixedWidth(34)
+        layout.addWidget(role)
+        pay_label = QLabel("支付")
+        pay_label.setObjectName("muted")
+        layout.addWidget(pay_label)
+        pay = QLineEdit(str(trade.pay))
+        pay.setFixedWidth(68)
+        pay.setToolTip("按游戏真实成交修改，离开输入框后自动保存")
+        layout.addWidget(pay)
+        layout.addWidget(self._trade_asset_widget(trade.source))
+        layout.addWidget(QLabel("→"))
+        receive_label = QLabel("获得")
+        receive_label.setObjectName("muted")
+        layout.addWidget(receive_label)
+        receive = QLineEdit(str(trade.receive))
+        receive.setFixedWidth(68)
+        receive.setToolTip("按游戏真实成交修改，离开输入框后自动保存")
+        layout.addWidget(receive)
+        layout.addWidget(self._trade_asset_widget(trade.target))
+        fee = trade_gold(trade, item_fees)
+        fee_text = f"金币 {fee:,}" if fee is not None else "金币未填"
+        fee_label = QLabel(fee_text)
+        fee_label.setObjectName("muted")
+        layout.addWidget(fee_label)
+        layout.addStretch()
+        duplicate = QPushButton("复制")
+        duplicate.setToolTip("复制这一笔，用于记录同方向的下一次成交")
+        duplicate.clicked.connect(lambda _checked=False, saved=index: self._duplicate_trade_at(saved))
+        layout.addWidget(duplicate)
+        remove = QPushButton("删除")
+        remove.clicked.connect(lambda _checked=False, saved=index: self._remove_trade_at(saved))
+        layout.addWidget(remove)
+        pay.editingFinished.connect(
+            lambda saved=index, p=pay, r=receive: self._update_trade(saved, p, r))
+        receive.editingFinished.connect(
+            lambda saved=index, p=pay, r=receive: self._update_trade(saved, p, r))
+        return row
+
+    @staticmethod
+    def _trade_asset_widget(currency: str) -> QWidget:
+        asset = QWidget()
+        layout = QHBoxLayout(asset)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        icon = QLabel()
+        icon.setFixedSize(22, 22)
+        icon.setPixmap(item_pixmap(currency, 20))
+        layout.addWidget(icon)
+        name = item_name(currency)
+        label = QLabel()
+        label.setFixedWidth(98)
+        label.setText(label.fontMetrics().elidedText(
+            name, Qt.TextElideMode.ElideRight, label.width()))
+        label.setToolTip(name)
+        layout.addWidget(label)
+        return asset
 
     def _refresh_trades(self, now: int):
         entries = self._route_trades()
@@ -1315,13 +1463,14 @@ class Dashboard(QWidget):
             self.trade_list.clear()
             for index, trade in reversed(entries):
                 stamp = time.strftime("%H:%M:%S", time.localtime(trade.observed_at))
-                fee = trade_gold(trade, item_fees)
-                gold = f" · 金币 {fee:,}" if fee is not None else " · 金币未填"
-                label = (f"{stamp}  {trade.role}  付 {trade.pay:,} {item_name(trade.source)}"
-                         f" → 得 {trade.receive:,} {item_name(trade.target)}{gold}")
-                entry = QListWidgetItem(label)
+                entry = QListWidgetItem()
                 entry.setData(Qt.ItemDataRole.UserRole, index)
+                entry.setToolTip(f"记录时间 {stamp}")
+                widget = self._trade_item_widget(index, trade, item_fees)
+                hint = widget.sizeHint()
+                entry.setSizeHint(QSize(hint.width(), max(50, hint.height() + 6)))
                 self.trade_list.addItem(entry)
+                self.trade_list.setItemWidget(entry, widget)
         if not entries:
             self.trade_profit.setText("暂无交易记录")
             self.trade_balances.setText("录入实际成交后，这里显示本路线的净变动与持仓估值。")
@@ -1881,6 +2030,7 @@ class Dashboard(QWidget):
         if not hasattr(self, "rows"):
             return
         now = now or int(time.time())
+        self._set_recommended_route([])
         if self._active_lead_source != self._lead_source(now):
             self._update_suggestions()
         self._update_lead_source_label(now)
@@ -2033,6 +2183,12 @@ class Dashboard(QWidget):
             + ("请填写每个交易物品所需金币；基础通货金币按获得数量计算。"
                if outcome.exact_gold is None else "报价与库存随时可能变化，下单前再核对。")
         )
+        if outcome.profit > 0:
+            self._set_recommended_route([
+                ("买入", pairs[0], outcome.start_amount, outcome.item_amount),
+                ("卖出", pairs[1], outcome.item_amount, outcome.exit_amount),
+                ("换回", pairs[2], outcome.exit_amount, outcome.final_amount),
+            ])
 
     def _budget_books(self, pairs: tuple[tuple[str, str], ...],
                       quotes: tuple[Quote, Quote, Quote], budget: int,
@@ -2056,6 +2212,13 @@ class Dashboard(QWidget):
                           books: tuple[Book, Book, Book], budget: int, now: int,
                           ignore_stock: bool):
         buy, sell, convert = quotes
+        if plan.profit > 0:
+            self._set_recommended_route([
+                ("买入", (buy.source, buy.target), plan.buy.spent, plan.buy.received),
+                ("卖出", (sell.source, sell.target), plan.sell.spent, plan.sell.received),
+                ("换回", (convert.source, convert.target),
+                 plan.convert.spent, plan.convert.received),
+            ])
         oldest = max(0, now - min(book.observed_at for book in books))
         stock_checked = not ignore_stock and all(quote.stock is not None for quote in quotes)
         if plan.estimated_profit <= 0:
@@ -2140,6 +2303,13 @@ class Dashboard(QWidget):
     def _show_depth_plan(self, plan: DepthPlan, quotes: tuple[Quote, Quote, Quote],
                          books: tuple[Book, Book, Book], now: int):
         buy, sell, convert = quotes
+        if plan.profit > 0:
+            self._set_recommended_route([
+                ("买入", (buy.source, buy.target), plan.buy.spent, plan.buy.received),
+                ("卖出", (sell.source, sell.target), plan.sell.spent, plan.sell.received),
+                ("换回", (convert.source, convert.target),
+                 plan.convert.spent, plan.convert.received),
+            ])
         oldest = max(0, now - min(book.observed_at for book in books))
         estimated_profit = plan.estimated_profit
         if oldest > MAX_QUOTE_AGE:
