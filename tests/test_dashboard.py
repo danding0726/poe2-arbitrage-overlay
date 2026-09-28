@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QBoxLayout, QPushButton, QScrollArea
+from PySide6.QtWidgets import QApplication, QBoxLayout, QLabel, QPushButton, QScrollArea
 from PySide6.QtTest import QTest
 
 from poe2arb.catalog import catalog
@@ -30,6 +30,52 @@ class DashboardTests(unittest.TestCase):
                          "2,500 崇高石 ≈ 1 神圣石")
         self.assertEqual(readable_rate("神圣石", "崇高石", Fraction(30, 2)),
                          "1 神圣石 ≈ 15 崇高石")
+
+    def test_english_language_localizes_current_dashboard_and_persists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(json.dumps({"language": "en"}), encoding="utf-8")
+            with (patch("poe2arb.dashboard.settings_path", return_value=path),
+                  patch("poe2arb.dashboard.QTimer.singleShot")):
+                window = Dashboard()
+                try:
+                    self.assertEqual(window.language_select.currentData(), "en")
+                    self.assertEqual(window.windowTitle(),
+                                     "PoE2 Single-Item Arbitrage Assistant")
+                    self.assertEqual(window.findChild(QLabel, "heading").text(),
+                                     "◆  PoE2 Single-Item Arbitrage Assistant")
+                    self.assertEqual(window.trade_role.currentData(), "买入")
+                    self.assertEqual(window.trade_role.currentText(), "Buy")
+                    self.assertEqual(window.rows["买入"].title.text(), "Buy")
+                    self.assertEqual(window.rate_cards[0].directions[
+                        (EXALTED, DIVINE)].amount.text(), "No current order entered")
+                    window._save_settings()
+                    self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["language"],
+                                     "en")
+                finally:
+                    window.close()
+
+    def test_language_selector_reopens_window_in_selected_language(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            with (patch("poe2arb.dashboard.settings_path", return_value=path),
+                  patch("poe2arb.dashboard.QTimer.singleShot")):
+                window = Dashboard()
+                replacement = None
+                try:
+                    index = window.language_select.findData("en")
+                    window.language_select.setCurrentIndex(index)
+                    self.app.processEvents()
+                    replacement = self.app._dashboard_window
+                    self.assertIsNot(replacement, window)
+                    self.assertEqual(replacement.language_select.currentData(), "en")
+                    self.assertEqual(replacement.trade_role.currentText(), "Buy")
+                    self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["language"],
+                                     "en")
+                finally:
+                    window.close()
+                    if replacement is not None:
+                        replacement.close()
 
     def test_old_order_gold_migrates_to_per_item_and_old_core_gold_is_ignored(self):
         with tempfile.TemporaryDirectory() as directory:

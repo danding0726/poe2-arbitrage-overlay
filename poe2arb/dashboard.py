@@ -22,6 +22,7 @@ from .catalog import catalog, item_icon, item_name, item_pixmap
 from .core import historical_edges, latest_market_hour
 from .data import app_data_dir, leagues, load_snapshot, sync_recent
 from .depth import Book, DepthPlan, Level, captured_book, effective_levels, estimate_depth
+from .i18n import language as active_language, set_language, translate_text
 from .scout import MAX_AGE_SECONDS, fetch_scout_snapshot, load_scout_snapshot, scout_edges, snapshot_age
 from .single_item import (CHAOS, CORE, DIVINE, EXALTED, MAX_QUOTE_AGE, Quote,
                           core_gold_cost, evaluate, indicative_paths, item_unit_gold,
@@ -97,7 +98,7 @@ class RegionSelector(QWidget):
         painter.drawPixmap(self.rect(), self.image)
         painter.fillRect(self.rect(), QColor(0, 0, 0, 90))
         painter.setPen(QColor("#ffffff"))
-        painter.drawText(25, 38, f"框选{self.label} · Esc 取消")
+        painter.drawText(25, 38, translate_text(f"框选{self.label} · Esc 取消"))
         if self.start and self.end:
             rect = QRect(self.start, self.end).normalized()
             painter.setPen(QPen(QColor("#6bd6a0"), 3))
@@ -381,13 +382,15 @@ class QuoteRow(QFrame):
     def _fit_direction_text(self):
         available = max(70, self.direction_host.width() - self.DIRECTION_NON_TEXT_WIDTH)
         metrics = self.source_name.fontMetrics()
+        source_text = translate_text(self.source_text)
+        target_text = translate_text(self.target_text)
         if not self.pair:
             self.source_name.setFixedWidth(available)
             self.source_name.setText(metrics.elidedText(
-                self.source_text, Qt.TextElideMode.ElideRight, available))
+                source_text, Qt.TextElideMode.ElideRight, available))
             return
-        source_natural = metrics.horizontalAdvance(self.source_text)
-        target_natural = metrics.horizontalAdvance(self.target_text)
+        source_natural = metrics.horizontalAdvance(source_text)
+        target_natural = metrics.horizontalAdvance(target_text)
         if source_natural + target_natural <= available:
             source_width = source_natural
             target_width = target_natural
@@ -405,9 +408,9 @@ class QuoteRow(QFrame):
         self.source_name.setFixedWidth(source_width)
         self.target_name.setFixedWidth(target_width)
         self.source_name.setText(metrics.elidedText(
-            self.source_text, Qt.TextElideMode.ElideRight, source_width))
+            source_text, Qt.TextElideMode.ElideRight, source_width))
         self.target_name.setText(metrics.elidedText(
-            self.target_text, Qt.TextElideMode.ElideRight, target_width))
+            target_text, Qt.TextElideMode.ElideRight, target_width))
 
     def set_pair(self, pair: tuple[str, str] | None, quote: Quote | None):
         self.pair = pair
@@ -467,6 +470,8 @@ class Dashboard(QWidget):
     def __init__(self):
         super().__init__()
         self.settings = read_settings()
+        self.language = self.settings.get("language", "zh_CN")
+        set_language(self.language)
         self.snapshot = load_snapshot()
         self.scout_snapshot = load_scout_snapshot()
         self.quotes: dict[tuple[str, str], Quote] = self._restore_quotes()
@@ -490,7 +495,7 @@ class Dashboard(QWidget):
         self.setMinimumSize(1000, 640)
         available = QApplication.primaryScreen().availableGeometry()
         self.resize(min(1320, available.width()), min(940, available.height()))
-        self.setWindowTitle("PoE2 单物品价差助手")
+        self.setWindowTitle(translate_text("PoE2 单物品价差助手"))
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
         self.show()
         self.timer = QTimer(self)
@@ -526,6 +531,14 @@ class Dashboard(QWidget):
         self.league.setMaximumWidth(210)
         self.league.currentIndexChanged.connect(self._league_changed)
         header.addStretch()
+        header.addWidget(QLabel("语言"))
+        self.language_select = QComboBox()
+        self.language_select.addItem("中文", "zh_CN")
+        self.language_select.addItem("English", "en")
+        language_index = self.language_select.findData(self.language)
+        self.language_select.setCurrentIndex(max(0, language_index))
+        self.language_select.currentIndexChanged.connect(self._language_changed)
+        header.addWidget(self.language_select)
         header.addWidget(QLabel("联赛"))
         header.addWidget(self.league)
         self.status = QLabel("正在加载行情…")
@@ -707,7 +720,8 @@ class Dashboard(QWidget):
         journal_layout.addWidget(self.trade_leg)
         journal_entry = QHBoxLayout()
         self.trade_role = QComboBox()
-        self.trade_role.addItems(ROLES)
+        for role in ROLES:
+            self.trade_role.addItem(role, role)
         self.trade_role.currentIndexChanged.connect(self._trade_role_changed)
         journal_entry.addWidget(self.trade_role)
         self.trade_fields = []
@@ -797,6 +811,38 @@ class Dashboard(QWidget):
             QLabel#profit { color:#89e4ae; font-size:29px; font-weight:600; }
         """)
 
+    def _translate_ui(self):
+        if active_language() != "en":
+            return
+        self.setWindowTitle(translate_text(self.windowTitle()))
+        for widget in self.findChildren(QWidget):
+            if isinstance(widget, (QLabel, QPushButton, QCheckBox)):
+                widget.setText(translate_text(widget.text()))
+            if isinstance(widget, QLineEdit):
+                widget.setPlaceholderText(translate_text(widget.placeholderText()))
+            if widget.toolTip():
+                widget.setToolTip(translate_text(widget.toolTip()))
+            if isinstance(widget, QComboBox) and widget is not self.language_select:
+                for index in range(widget.count()):
+                    widget.setItemText(index, translate_text(widget.itemText(index)))
+            if isinstance(widget, QListWidget):
+                for index in range(widget.count()):
+                    item = widget.item(index)
+                    item.setText(translate_text(item.text()))
+
+    def _language_changed(self):
+        selected = self.language_select.currentData()
+        if selected == self.language:
+            return
+        self.language = selected
+        self.settings["language"] = selected
+        self._save_settings()
+        app = QApplication.instance()
+        replacement = Dashboard()
+        replacement.move(self.pos())
+        app._dashboard_window = replacement
+        self.close()
+
     def _load_leagues(self):
         names = leagues(self.snapshot)
         if self.scout_snapshot and self.scout_snapshot.get("league") not in names:
@@ -828,6 +874,7 @@ class Dashboard(QWidget):
 
     def _save_settings(self):
         data = {"league": self.league.currentText(), "item": self.selected_item,
+                "language": self.language,
                 "gold_per_item_version": 1,
                 "recent_items": self.recent_items,
                 "start": self.start_select.currentData(), "exit": self.exit_select.currentData(),
@@ -986,7 +1033,7 @@ class Dashboard(QWidget):
             f"完整路线：{item_name(start)} → {item_name(item)} → "
             f"{item_name(exit_currency)} → {item_name(start)}"
         )
-        role = self.trade_role.currentText()
+        role = self.trade_role.currentData()
         pair = self.rows[role].pair
         if pair:
             self.trade_leg.setText(
@@ -995,7 +1042,7 @@ class Dashboard(QWidget):
             )
 
     def _prefill_trade(self):
-        row = self.rows[self.trade_role.currentText()]
+        row = self.rows[self.trade_role.currentData()]
         quote = self.quotes.get(row.pair) if row.pair else None
         if quote is None:
             self.trade_status.setText("该方向没有当前报价，请手动填写实际成交数量。")
@@ -1005,7 +1052,7 @@ class Dashboard(QWidget):
         self.trade_status.setText("已带入报价；请按游戏实际成交数量核对，再点击记录。")
 
     def _record_trade(self):
-        role = self.trade_role.currentText()
+        role = self.trade_role.currentData()
         row = self.rows[role]
         if row.pair is None or not self.selected_item:
             self.trade_status.setText("请先选择物品及买卖通货。")
@@ -1372,6 +1419,7 @@ class Dashboard(QWidget):
                 self.active_core_card = card
         self.core_fields = self.active_core_card.fields
         self.active_core_card.edit(source, target, self.quotes.get(self.core_pair))
+        self._translate_ui()
 
     def save_core_rate(self):
         values = [field.text().strip().replace(",", "") for field in self.core_fields]
@@ -1536,6 +1584,12 @@ class Dashboard(QWidget):
         )
 
     def refresh(self, now: int | None = None):
+        try:
+            self._refresh_content(now)
+        finally:
+            self._translate_ui()
+
+    def _refresh_content(self, now: int | None = None):
         if not hasattr(self, "rows"):
             return
         now = now or int(time.time())
@@ -1740,4 +1794,5 @@ def run():
     app = QApplication(sys.argv)
     app.setFont(QFont("Microsoft YaHei UI", 10))
     window = Dashboard()
+    app._dashboard_window = window
     return app.exec()

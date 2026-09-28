@@ -32,10 +32,14 @@ def record(item_id: str) -> dict:
 
 
 def item_name(item_id: str) -> str:
+    from .i18n import language
+
     suffix = item_id.rsplit("/", 1)[-1]
+    entry = record(item_id)
+    if language() == "en" and entry.get("en"):
+        return entry["en"]
     if suffix in COMMON_ZH:
         return COMMON_ZH[suffix]
-    entry = record(item_id)
     if entry.get("zh_tw"):
         return entry["zh_tw"]
     if entry.get("en"):

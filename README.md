@@ -12,15 +12,15 @@ The app checks the spread of a single item across Exalted Orbs, Divine Orbs, and
 
 ## Screenshots
 
-| Pick a historical lead | Read the live order | Review the estimate |
-| --- | --- | --- |
-| ![Route selection](docs/flow-03-choose.png) | ![Quote capture](docs/flow-04-read.png) | ![Profit estimate](docs/flow-05-result.png) |
+The current single-window dashboard keeps core rates, item selection, all three directed orders, and the result in one scrollable view:
 
-The compact overlay keeps the route, quote progress, and result visible while you check the in-game Currency Exchange:
+![Current PoE2 Single-Item Arbitrage Assistant dashboard](docs/assets/dashboard-current-en.png)
 
-![Compact overlay workflow](docs/overlay-workflow.png)
+The lower section contains the three live order rows, profit calculation, and actual-fill journal:
 
-> The current application UI is Chinese. This README translates the workflow and constraints; it does not imply that the desktop UI has been localized.
+![Current order and trade-log sections](docs/assets/dashboard-trades-current-en.png)
+
+Use the **Language** selector in the header to switch between **中文** and **English**. The choice is saved and restored on the next launch. Item names, core currencies, forms, quote states, calculations, and trade-log labels follow the selected language; item search accepts both Chinese and English names in either mode.
 
 ## Workflow
 
@@ -48,8 +48,6 @@ The compact overlay keeps the route, quote progress, and result visible while yo
 
    Core-rate cards show both directed quotes and their ages. Use **Update** on the relevant card to enter an order or read it from a screenshot. If OCR regions drift, use the two calibration controls at the bottom of the window.
 
-   ![Core exchange-rate capture](docs/flow-02-core.png)
-
 5. **Review the calculation.** The right side reports progress across the three quotes. Once all legs are present, the app shows the starting cost and profit for the smallest complete cycle, return percentage, maximum cycles allowed by stock, and—when exact per-order gold is known—profit per million gold.
 
    To inspect rate-only opportunities, enable **Ignore stock · theoretical spread only**. Stock may then remain empty. The app uses only the top quote for each leg, performs integer-order arithmetic, does not match multiple depth levels, and does not claim that the route is executable.
@@ -68,7 +66,7 @@ The **Multi-level stock** mode defaults to **Per level**, where each row contain
 
 The details also list the actual whole-order return amount. Decimal valuation is not a completed order, and additional conversion gold is not included. Gold is computed from the received quantities of completed orders and the applicable unit fees. Before trading, enter the combined amount in game and verify the actual payment and receipt. If OCR finds fewer than two levels, the app falls back to a single-level calculation.
 
-The application does not operate the game or place orders. A direction that is not currently visible in the game must be opened by the player before it can be read. Screenshot capture currently uses one delayed screenshot and requires the player to verify the direction; continuous passive capture remains future work.
+The application does not operate the game or place orders. A direction that is not currently visible in the game must be opened by the player before it can be read. Screenshot capture uses one delayed screenshot and requires the player to verify the direction.
 
 ## Gold and quote constraints
 
@@ -102,4 +100,4 @@ python -m unittest discover -s tests -v
 
 Use `build-windows.bat` to build the Windows executable. Application data is stored in `%LOCALAPPDATA%\PoE2ArbDesk\`; set `POE2ARB_DATA_DIR` to redirect it.
 
-The single-page application entry point is `poe2arb/dashboard.py`. See the [single-item trading specification](docs/SINGLE_ITEM_TRADING_SPEC.md) for the product design.
+The current application entry point is `poe2arb/dashboard.py`.
