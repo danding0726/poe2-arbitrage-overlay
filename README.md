@@ -1,41 +1,91 @@
-# PoE2 单物品价差助手
+<div align="center">
+  <img src="docs/assets/poe2-arb-icon.png" alt="PoE2 Arbitrage Assistant icon" width="152">
+  <h1>PoE2 Single-Item Arbitrage Assistant</h1>
+  <p>A Windows desktop companion for checking three-leg currency exchange opportunities in Path of Exile 2.</p>
+  <p><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
+</div>
 
-Windows 单窗口应用，用于检查一个物品在崇高石、神圣石、混沌石之间的兑换价差。顶部显示六个有向核心汇率；中间选择物品与买卖币种；下方录入当前游戏订单并查看完整换回起始通货后的收益、整数交易量、库存上限和每百万金币收益。物品与通货图标沿用本地目录。
+> [!IMPORTANT]
+> This is an unofficial player tool and is not affiliated with Grinding Gear Games. It never controls the game or places orders. Always verify prices, direction, stock, and gold fees in game before trading.
 
-## 使用流程
+The app checks the spread of a single item across Exalted Orbs, Divine Orbs, and Chaos Orbs. Six directed core exchange rates appear at the top; the item and the currencies used to buy and sell it are selected in the middle; order sizes from the game are entered below. The result includes profit after returning to the starting currency, minimum integer trade sizes, stock limits, and profit per million gold. Item and currency icons are loaded from the local catalog.
 
-1. 启动应用，选择联赛。应用会在后台更新 GGG 小时历史和 Poe2Scout 快照。历史建议仅决定先检查什么物品，不能当成当前可成交价格。
-2. 用“按历史线索选择物品”下拉框查看按历史线索排序的物品，或在搜索框输入中文、英文名称；下方历史线索也可直接点击。线索会标明哪种通货买入、哪种通货卖出；选择有正向线索的物品时会自动带入对应路线，之后仍可手动改动。选过的物品会保留在“最近选择”中，方便一键切回。历史排序仅决定优先检查什么，不表示实时可成交利润。
+## Screenshots
 
-历史线索会剔除任一侧成交不足 100 个单位的交易对；Scout 快照还要求交易对汇总量至少 100,000。三段路径中任一交易对不达标，整条线索就不会显示。此门槛只降低薄量噪声，不能证明剩余线索可按当前价格成交。
-Scout 快照只在数据时间不超过 15 分钟时用于线索；程序启动后每 5 分钟后台检查一次，顶部“刷新历史线索”会同时刷新 Scout 和小时历史。超时的 Scout 不会因刚被重新下载就算作新报价，而是回退到两小时内的小时历史；两种来源都过期则暂停线索推荐。线索旁会标明实际数据来源和时间。
-3. 在游戏 Currency Exchange 中分别查看 `起始通货 → 物品`、`物品 → 卖出通货`、`卖出通货 → 起始通货`。游戏右侧“我拥有的”是支付，左侧“我需要的”是获得。
-4. 将每笔订单的支付、获得、可获库存填到对应行，停止输入后会自动保存并测算；只需额外填写换得 1 个交易物品所需的金币，程序按获得的物品数量计算总金币。支付或获得可填小数，保存时会按比例换成最小整数订单（如 `1.5 → 1` 变为 `3 → 2`）；两边都是整数时保留原订单数量。换算后若库存不够一笔，仍可保存作参考，但会标注库存不足。截图中的整笔物品金币仅在可整除获得数量时自动换成单件金币。顶部核心汇率分别显示两个方向的报价与时效；点击对应的“更新”，直接在该卡片中录入或截图读取。识别区域不准时可用窗口底部的两个校准按钮重新框选。
-5. 右侧会提示三笔报价的录入进度。录齐后显示最小完整一轮的起始成本、利润、收益率、库存允许的最大轮数，以及准确订单金币已知时的每百万金币收益。若只想检查汇率机会，勾选顶部“忽略库存 · 只看理论价差”：库存可以留空，按三笔首档报价计算整数订单，不做多档撮合，也不宣称可成交。
-6. 完成游戏交易后，在底部“实际交易记录”选择买入、卖出或换回，只填写真实支付和获得，再点击“记录实际成交”。物品金币取自买入报价中的单件价格，基础通货金币按固定费率自动计算；若尚未填物品金币，仍可先记录成交，稍后补入单价便会补算缺失的金币。“带入当前报价”只用于预填，必须先按游戏成交结果核对。完成换回且其他币种净变动为零时显示已实现的起始通货净收益；有未换回持仓时，按当前录入的有向报价显示参考估值并提示报价年龄。可删除选中记录，记录随应用设置保存，并按联赛、物品和交易路线分别显示。
+| Pick a historical lead | Read the live order | Review the estimate |
+| --- | --- | --- |
+| ![Route selection](docs/flow-03-choose.png) | ![Quote capture](docs/flow-04-read.png) | ![Profit estimate](docs/flow-05-result.png) |
 
-交易记录区会直接写明完整路径“起始通货 → 交易物品 → 卖出通货 → 起始通货”，以及当前选中的那一步具体支付什么、获得什么。窗口较窄时，当前订单与利润测算会自动上下排列，避免横向滚动。
+The compact overlay keeps the route, quote progress, and result visible while you check the in-game Currency Exchange:
 
-截图区域包含完整市场梯度时，识别结果会暂存多档比率与库存；核对方向和数量后点击该行“保存读取”，才会纳入测算。顶部“多档库存”默认“逐档”（每行独立库存），也可切换“累计”（后行数字包含前行）；应按游戏界面的实际含义选择。多档结果始终标为“预估”：程序按优价到劣价使用各档完整整数订单，列出使用档位与剩余持仓；剩余物品与中间通货按首档有向汇率（允许小数）折回起始通货，计入预估利润、收益率和每百万金币收益。详情会另列实际整手换回数量；小数折算不是已成交订单，额外兑换金币也未计入。金币按整手交易各项获得数量及单位费率计算。请在游戏中输入合计数量，核对实际支付、获得后再交易。未识别到至少两档时仍使用单档测算。
+![Compact overlay workflow](docs/overlay-workflow.png)
 
-应用不会操作游戏或下单。游戏画面中未显示的交易方向，需要玩家切换后才能读取。截图读取目前使用单次延迟截图，并要求玩家核对交易方向；连续被动读取仍在开发范围内。
+> The current application UI is Chinese. This README translates the workflow and constraints; it does not imply that the desktop UI has been localized.
 
-### 金币与报价限制
+## Workflow
 
-- 三条有向报价必须分别录入；正反方向不能互相取倒数。
-- 报价或三条报价的录入间隔超过 3 分钟，利润数字仍保留为黄色“参考测算”，但不再视为近期可核验报价；请重新核对三笔当前游戏订单。历史价格不参与利润计算。
-- 三笔数值齐全但库存无法支持最小整数交易时，仍显示理论价差，同时标明“库存不足”；这不代表该利润可以成交。
-- “忽略库存”模式不需要录入库存，但仅展示首档汇率的理论价差；不代表游戏当前库存支持交易。切回库存模式后，未填库存的报价仍是参考测算。
-- 多档估算不把所有库存当成首档价格；OCR 的梯度比率可能经过四舍五入，且撮合、金币和库存口径可能与估算不同，因此不显示为已确认可成交利润。
-- 计算按完整整数订单和当前读取的可获库存进行。
-- 换得基础通货的固定金币费为：崇高石每个 120、混沌石每个 160、神圣石每个 800。界面不再要求逐笔输入这三项；旧报价或旧交易记录里手填的基础通货金币值也不会用于计算。
-- 交易物品金币框填写每个物品的费用，不是整笔订单费用。旧版保存的整笔物品金币仅在可整除获得数量时迁移为单价，否则清空待核对；旧版实际成交记录已保存的物品金币总额保留。
-- 通货利润与金币成本分别展示；金币不会自动折算成崇高石。
-- 实际交易记录只统计本路线已录入的净变动，不要求填本金；持仓估值依赖手动录入或截图核对的当前报价，并非自动同步的市场成交价。缺少有向报价或记录涉及未覆盖的支付时，不给出估值。金币费用独立列示，不从通货利润中直接扣除。
+1. **Start the app and select a league.** The app updates GGG hourly history and a Poe2Scout snapshot in the background. Historical data only suggests which item to inspect first; it is never treated as an executable price.
 
-## 运行
+2. **Choose a candidate route.** Use **Select item from historical leads** to browse items ranked by historical signals, or search by a Chinese or English name. Historical leads below the selector are also clickable. Each lead identifies the buy and sell currencies. Selecting a positive lead fills in that route automatically, but it can still be changed manually. Previously selected items stay under **Recent selections** for quick access.
 
-需要 Windows 10/11 与 Python 3.12：
+   A lead is excluded if either side of a pair has less than 100 units of volume. A Scout snapshot also requires at least 100,000 aggregate volume for the pair. If any pair in the three-leg path misses its threshold, the whole lead is hidden. This reduces thin-market noise but does not prove that the remaining price is executable.
+
+   Scout data is used only when its timestamp is no more than 15 minutes old. After launch, the app checks every five minutes; **Refresh historical leads** refreshes both Scout and hourly history. Re-downloading an old Scout snapshot does not make its quote fresh. The app falls back to hourly history that is no more than two hours old, and pauses recommendations when both sources are stale. Every lead shows its actual source and timestamp.
+
+3. **Check all three legs in game.** In Currency Exchange, inspect:
+
+   ```text
+   Starting currency -> Item
+   Item -> Selling currency
+   Selling currency -> Starting currency
+   ```
+
+   On the game screen, the right side (**I Have**) is what you pay and the left side (**I Want**) is what you receive.
+
+4. **Enter or capture the live orders.** For each leg, fill in the amount paid, amount received, and available stock. The app saves and recalculates after input stops. For the item purchase, also enter the gold required for one traded item; total gold is derived from the number of items received.
+
+   Paid and received amounts may be decimal. On save, a fractional ratio is reduced to the smallest integer order—for example, `1.5 -> 1` becomes `3 -> 2`. When both values are already integers, the original order size is retained. A quote can still be saved as a reference if stock does not cover one order, but it is marked **Insufficient stock**. A screenshot's total item gold is converted to per-item gold only when it divides evenly by the item quantity.
+
+   Core-rate cards show both directed quotes and their ages. Use **Update** on the relevant card to enter an order or read it from a screenshot. If OCR regions drift, use the two calibration controls at the bottom of the window.
+
+   ![Core exchange-rate capture](docs/flow-02-core.png)
+
+5. **Review the calculation.** The right side reports progress across the three quotes. Once all legs are present, the app shows the starting cost and profit for the smallest complete cycle, return percentage, maximum cycles allowed by stock, and—when exact per-order gold is known—profit per million gold.
+
+   To inspect rate-only opportunities, enable **Ignore stock · theoretical spread only**. Stock may then remain empty. The app uses only the top quote for each leg, performs integer-order arithmetic, does not match multiple depth levels, and does not claim that the route is executable.
+
+6. **Record completed trades.** In **Actual trade log**, choose Buy, Sell, or Return; enter only what was actually paid and received; then select **Record actual fill**. Item gold comes from the per-item price in the buy quote. Base-currency gold is calculated from fixed rates. If the item gold is unknown, the fill can be recorded first and completed later by entering the unit price.
+
+   **Use current quote** only pre-fills the form; compare it with the in-game fill before saving. After the return leg is complete and all other currency balances are zero, the app shows realized net profit in the starting currency. Open positions are valued using the current directed quotes and display quote age. Records can be deleted and are persisted with app settings, grouped by league, item, and route.
+
+The trade log spells out the full path—**starting currency -> traded item -> selling currency -> starting currency**—and the exact assets paid and received for the selected leg. In narrow windows, the order and result panels stack vertically instead of forcing horizontal scrolling.
+
+## Multi-level depth and OCR
+
+When a screenshot contains the full market ladder, OCR temporarily stores multiple ratios and stock levels. Verify direction and amounts, then select **Save reading** for that row before the data is used.
+
+The **Multi-level stock** mode defaults to **Per level**, where each row contains independent stock. Select **Cumulative** only when later rows include earlier rows, matching the in-game display. Multi-level results are always labeled **Estimate**. The app consumes complete integer orders from best to worse levels, reports the used levels and remaining position, and values any leftover item or intermediate currency with the best directed rate, allowing decimals.
+
+The details also list the actual whole-order return amount. Decimal valuation is not a completed order, and additional conversion gold is not included. Gold is computed from the received quantities of completed orders and the applicable unit fees. Before trading, enter the combined amount in game and verify the actual payment and receipt. If OCR finds fewer than two levels, the app falls back to a single-level calculation.
+
+The application does not operate the game or place orders. A direction that is not currently visible in the game must be opened by the player before it can be read. Screenshot capture currently uses one delayed screenshot and requires the player to verify the direction; continuous passive capture remains future work.
+
+## Gold and quote constraints
+
+- All three directed quotes must be entered independently. Never infer one direction by taking the reciprocal of the other.
+- When a quote is older than three minutes, or the three quotes were captured more than three minutes apart, the result remains visible as a yellow **Reference estimate** but is no longer considered recently verifiable. Recheck all three live game orders. Historical prices never enter the profit calculation.
+- If all amounts are present but stock cannot cover the smallest integer cycle, the theoretical spread is still shown and marked **Insufficient stock**. This does not make the profit executable.
+- **Ignore stock** mode needs no stock input, but shows only a theoretical top-of-book spread. Switching back leaves quotes without stock as reference estimates.
+- Multi-level estimation does not price all stock at the best level. OCR ladder ratios may be rounded, and matching, gold, or stock semantics may differ from the estimate, so the result is never labeled as confirmed executable profit.
+- Calculations use complete integer orders and the currently captured available stock.
+- Fixed gold fees for receiving base currency are: 120 per Exalted Orb, 160 per Chaos Orb, and 800 per Divine Orb. The UI no longer asks for these values on each leg, and manually entered legacy values are ignored.
+- The item gold field is the fee **per item**, not per order. Legacy order-level item fees are migrated only when evenly divisible by the received quantity; otherwise they are cleared for review. Gold totals already stored in legacy actual-trade records are retained.
+- Currency profit and gold cost are shown separately. Gold is not automatically converted into Exalted Orbs.
+- The actual trade log measures only the net changes recorded for the selected route; it does not require the principal to be entered. Open-position valuation depends on manually entered or screenshot-verified directed quotes, not an automatically synchronized market price. No valuation is produced when a directed quote is missing or a record uses an uncovered payment asset. Gold costs are listed separately and are not directly deducted from currency profit.
+
+## Installation and development
+
+Requires Windows 10/11 and Python 3.12:
 
 ```powershell
 py -3.12 -m venv .venv
@@ -44,12 +94,12 @@ pip install -r requirements.txt
 python main.py
 ```
 
-`python main.py --self-test` 检查本地目录、图标、整数计算与 OCR 引擎。`python -m unittest discover -s tests -v` 运行回归测试。
+Run `python main.py --self-test` to check the local catalog, icons, integer arithmetic, and OCR engine. Run the regression suite with:
 
-使用 `build-windows.bat` 生成 Windows EXE。应用数据位于 `%LOCALAPPDATA%\PoE2ArbDesk\`，可用 `POE2ARB_DATA_DIR` 重定向。
+```powershell
+python -m unittest discover -s tests -v
+```
 
-## 当前状态
+Use `build-windows.bat` to build the Windows executable. Application data is stored in `%LOCALAPPDATA%\PoE2ArbDesk\`; set `POE2ARB_DATA_DIR` to redirect it.
 
-单页程序入口是 `poe2arb/dashboard.py`。产品规格见 [单物品价差助手规格](docs/SINGLE_ITEM_TRADING_SPEC.md)。
-
-这是非官方玩家工具，与 Grinding Gear Games 无关联。历史价格和截图后的报价都可能变化；交易前请在游戏中核对。
+The single-page application entry point is `poe2arb/dashboard.py`. See the [single-item trading specification](docs/SINGLE_ITEM_TRADING_SPEC.md) for the product design.
