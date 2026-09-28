@@ -46,9 +46,11 @@ Use the **Language** selector in the header to switch between **中文** and **E
 
    Paid and received amounts may be decimal. On save, a fractional ratio is reduced to the smallest integer order—for example, `1.5 -> 1` becomes `3 -> 2`. When both values are already integers, the original order size is retained. A quote can still be saved as a reference if stock does not cover one order, but it is marked **Insufficient stock**. A screenshot's total item gold is converted to per-item gold only when it divides evenly by the item quantity.
 
-   Core-rate cards show both directed quotes and their ages. Use **Update** on the relevant card to enter an order or read it from a screenshot. If OCR regions drift, use the two calibration controls at the bottom of the window.
+   Core-rate cards show both directed quotes and their ages. Use **Update** on the relevant card to enter an order or read it from a screenshot. If OCR regions drift, use the two calibration controls at the bottom of the window. The calibration view overlays color-coded dashed examples for the Order/Gold and Ratio/Stock regions; these are guides only because positions vary with the game UI and display scaling.
 
 5. **Review the calculation.** The right side reports progress across the three quotes. Once all legs are present, the app shows the starting cost and profit for the smallest complete cycle, return percentage, maximum cycles allowed by stock, and—when exact per-order gold is known—profit per million gold.
+
+   Enter an **Available budget** in the current buy currency to get whole-order buy, sell, and return quantities for the selected route. The plan reports unused budget, estimated residual holdings, and returns on both invested and total budget; leave the field blank for the original unrestricted calculation. Missing stock is treated as sufficient and marked as a reference. Residual items and intermediate currency are estimates, not completed returns, and a plan profitable only by residual valuation is not locked-in profit. Depth levels are consumed from best to worse price, but the result is not guaranteed to be globally optimal across every possible combination.
 
    To inspect rate-only opportunities, enable **Ignore stock · theoretical spread only**. Stock may then remain empty. The app uses only the top quote for each leg, performs integer-order arithmetic, does not match multiple depth levels, and does not claim that the route is executable.
 
@@ -67,6 +69,8 @@ The **Multi-level stock** mode defaults to **Per level**, where each row contain
 The details also list the actual whole-order return amount. Decimal valuation is not a completed order, and additional conversion gold is not included. Gold is computed from the received quantities of completed orders and the applicable unit fees. Before trading, enter the combined amount in game and verify the actual payment and receipt. If OCR finds fewer than two levels, the app falls back to a single-level calculation.
 
 The application does not operate the game or place orders. A direction that is not currently visible in the game must be opened by the player before it can be read. Screenshot capture uses one delayed screenshot and requires the player to verify the direction.
+
+Hovering the stock ladder can cover the order inputs. In that case, the app explicitly marks quantities inferred from market depth rather than read from the order fields. Stock OCR rejects number boxes spanning multiple rows so adjacent values are not accidentally concatenated. Full-depth capture also requires the Ratio/Stock headers. Use **View latest capture** at the bottom of the window to inspect both captured regions and the raw OCR text; screenshots remain only in memory for the current run and are not uploaded.
 
 ## Gold and quote constraints
 

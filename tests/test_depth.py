@@ -69,6 +69,26 @@ class DepthTests(unittest.TestCase):
         self.assertEqual(plan.estimated_profit, plan.profit)
         self.assertEqual(plan.estimated_roi, plan.roi)
 
+    def test_single_level_budget_uses_best_affordable_size_beyond_scan_limit(self):
+        buy = Book(CHAOS, ITEM, (Level(2, 1, 100_000),), 100)
+        sell = Book(ITEM, DIVINE, (Level(2, 1, 100_000),), 101)
+        convert = Book(DIVINE, CHAOS, (Level(1, 10, 100_000),), 102)
+        plan = estimate_depth(buy, sell, convert, budget=40_000)
+        self.assertEqual((plan.buy.spent, plan.buy.received, plan.convert.received),
+                         (40_000, 20_000, 100_000))
+        self.assertTrue(plan.scanned_all)
+        self.assertIsNone(estimate_depth(buy, sell, convert, budget=3))
+        with self.assertRaisesRegex(ValueError, "预算"):
+            estimate_depth(buy, sell, convert, budget=0)
+
+    def test_multi_level_budget_can_skip_unaffordable_first_lot(self):
+        buy = Book(CHAOS, ITEM, (Level(10, 1, 1), Level(3, 1, 2)), 100)
+        sell = Book(ITEM, DIVINE, (Level(1, 1, 5),), 101)
+        convert = Book(DIVINE, CHAOS, (Level(1, 5, 5),), 102)
+        plan = estimate_depth(buy, sell, convert, budget=3)
+        self.assertEqual((plan.buy.spent, plan.buy.received, plan.convert.received), (3, 1, 5))
+        self.assertEqual(plan.buy.used, ((1, 1, 1),))
+
 
 if __name__ == "__main__":
     unittest.main()

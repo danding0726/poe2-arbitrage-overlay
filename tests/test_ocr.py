@@ -1,10 +1,15 @@
+import io
 import unittest
 from fractions import Fraction
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from poe2arb.ocr import (
     _ladder_quotes,
+    _has_ladder_headers,
     _selected_order_from_detections,
     resolve_capture_order,
+    read_exchange_panel,
 )
 
 
@@ -13,6 +18,36 @@ def box(x, y, width=30, height=12):
 
 
 class ExchangeOcrTests(unittest.TestCase):
+    def test_tooltip_stock_one_six_three_is_not_payment_163_or_gold_177(self):
+        from PIL import Image
+
+        lines = ["我需要的", "我擁有的", "1", "比率", "庫存", "1:26", "163", "177"]
+        boxes = [box(50, 5), box(550, 5), box(150, 50),
+                 box(300, 40), box(430, 40), box(300, 60),
+                 box(430, 60, height=72), box(430, 150)]
+        scores = [0.99] * len(lines)
+        self.assertIsNone(_selected_order_from_detections(lines, scores, boxes))
+        output = SimpleNamespace(txts=lines, scores=scores, boxes=boxes)
+        stream = io.BytesIO()
+        Image.new("RGB", (740, 185)).save(stream, format="PNG")
+        with patch("rapidocr.RapidOCR") as factory:
+            factory.return_value.return_value = output
+            result = read_exchange_panel(stream.getvalue())
+            self.assertIsNone(result["selected_order"])
+            factory.return_value.assert_called_once()
+        order = resolve_capture_order(result["selected_order"], {
+            "pay": 26, "receive": 1, "stock": 1, "confidence": 0.99})
+        self.assertEqual((order["pay"], order["receive"], order["gold"]), (26, 1, None))
+
+    def test_three_stock_like_integers_on_different_rows_are_not_an_order(self):
+        self.assertIsNone(_selected_order_from_detections(
+            ["1", "163", "177"], [0.99] * 3,
+            [box(150, 50), box(430, 80, height=60), box(430, 150)]))
+
+    def test_order_ratio_without_tooltip_is_not_a_ladder(self):
+        self.assertFalse(_has_ladder_headers(["1:50", "50", "1,000", "下訂單"], [0.99] * 4))
+        self.assertTrue(_has_ladder_headers(["比率", "庫存", "1:50", "10"], [0.99] * 4))
+        self.assertFalse(_has_ladder_headers(["比率", "庫存"], [0.99, 0.5]))
     def test_uses_coordinates_when_full_ocr_has_order_values(self):
         lines = ["我需要的", "1:6.90", "我拥有的", "10", "69", "1,600"]
         scores = [0.99, 0.98, 0.99, 0.96, 0.97, 0.95]
@@ -125,6 +160,25 @@ class ExchangeOcrTests(unittest.TestCase):
 
         self.assertEqual(_smallest_whole_lot("1", "6.83", 6), (41, 6))
         self.assertEqual(_smallest_whole_lot("1", "6.83", 600), (41, 6))
+
+    def test_exalted_fifty_first_level_keeps_stock_separate_from_order_size(self):
+        lines = ["1:50", "10", "1:51", "4", "1:52", "6", "1:56.67", "3",
+                 "1:60", "31", "<1:60", "182"]
+        boxes = [box(x, y, 85 if x == 10 else 50, 20)
+                 for y in (35, 65, 95, 125, 155, 185) for x in (10, 165)]
+        levels = _ladder_quotes(lines, [0.99] * len(lines), boxes)
+        self.assertEqual((levels[0]["pay"], levels[0]["receive"], levels[0]["stock"]),
+                         (50, 1, 10))
+        self.assertEqual([level["stock"] for level in levels], [10, 4, 6, 3, 31])
+
+    def test_rejects_stock_column_merged_across_three_rows(self):
+        lines = ["1:50", "10", "1:51", "463", "1:52", "1:56.67", "1:60", "31"]
+        boxes = [box(10, 35, 85, 20), box(165, 35, 50, 20),
+                 box(10, 65, 85, 20), box(165, 65, 50, 80),
+                 box(10, 95, 85, 20), box(10, 125, 85, 20),
+                 box(10, 155, 85, 20), box(165, 155, 50, 20)]
+        levels = _ladder_quotes(lines, [0.99] * len(lines), boxes)
+        self.assertEqual([level["stock"] for level in levels], [10, 31])
 
     def test_insufficient_stock_cannot_be_confirmed_as_an_executable_quote(self):
         from poe2arb.ocr import _smallest_whole_lot

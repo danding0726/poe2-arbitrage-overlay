@@ -257,6 +257,47 @@ class DashboardTests(unittest.TestCase):
                 finally:
                     restored.close()
 
+    def test_budget_plans_current_route_and_restores_unlimited_calculation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            with (patch("poe2arb.dashboard.settings_path", return_value=path),
+                  patch("poe2arb.dashboard.QTimer.singleShot")):
+                window = Dashboard()
+                try:
+                    window.select_item("Metadata/Items/Currency/CurrencyCorrupt")
+                    window.start_select.setCurrentIndex(window.start_select.findData(CHAOS))
+                    window.exit_select.setCurrentIndex(window.exit_select.findData(DIVINE))
+                    for role, values in (("买入", (2, 1, 10)),
+                                         ("卖出", (2, 1, 10)),
+                                         ("换回", (1, 10, 100))):
+                        row = window.rows[role]
+                        for field, value in zip((row.pay, row.receive, row.stock), values):
+                            field.setText(str(value))
+                        window._save_row(row)
+                    window.budget_input.setText("5")
+                    self.assertEqual(window.budget_currency.text(), "混沌石")
+                    self.assertEqual(window.metrics["本次投入"].text(), "4 混沌石")
+                    self.assertEqual(window.metrics["预算剩余"].text(), "1 混沌石")
+                    self.assertEqual(window.metrics["预算收益率"].text(), "≈+120.00%（按总预算）")
+                    self.assertIn("买入：付 4 混沌石", window.result_detail.text())
+                    self.assertIn("换回：付 1 神圣石", window.result_detail.text())
+                    window.budget_input.setText("3")
+                    self.assertIn("预算内无完整交易", window.result_state.text())
+                    window.budget_input.setText("abc")
+                    self.assertEqual(window.result_state.text(), "预算输入无效")
+                    window.budget_input.clear()
+                    self.assertEqual(window.metrics["预算剩余"].text(), "未设置")
+                    self.assertIn("+6", window.profit.text())
+                    window.budget_input.setText("5")
+                finally:
+                    window.close()
+                restored = Dashboard()
+                try:
+                    self.assertEqual(restored.budget_input.text(), "5")
+                    self.assertEqual(restored.metrics["预算剩余"].text(), "1 混沌石")
+                finally:
+                    restored.close()
+
     def test_actual_trade_journal_values_open_and_completed_cycle(self):
         with tempfile.TemporaryDirectory() as directory:
             with (patch("poe2arb.dashboard.settings_path", return_value=Path(directory) / "settings.json"),
@@ -537,6 +578,52 @@ class DashboardTests(unittest.TestCase):
                     ))
                     self.assertEqual(row.stock.text(), "")
                     self.assertIn("校准", window.capture_hint.text())
+                finally:
+                    window.close()
+
+    def test_hidden_order_uses_fifty_exalted_ladder_and_discloses_inference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with (patch("poe2arb.dashboard.settings_path", return_value=Path(directory) / "settings.json"),
+                  patch("poe2arb.dashboard.QTimer.singleShot")):
+                window = Dashboard()
+                try:
+                    window.select_item("Metadata/Items/Currency/CurrencyCorrupt")
+                    window.start_select.setCurrentIndex(window.start_select.findData(EXALTED))
+                    window.capture_role = "买入"
+                    window._capture_done((
+                        {"selected_order": None},
+                        {"stock": 10, "best_quote": {
+                            "pay": 50, "receive": 1, "stock": 10, "confidence": 0.99},
+                         "levels": []},
+                    ))
+                    row = window.rows["买入"]
+                    self.assertEqual((row.pay.text(), row.receive.text(), row.stock.text()),
+                                     ("50", "1", "10"))
+                    self.assertIn("市场档位推算", window.capture_hint.text())
+                    self.assertNotIn(row.pair, window.quotes)
+                finally:
+                    window.close()
+
+    def test_hidden_order_uses_fifty_exalted_ladder_and_discloses_inference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with (patch("poe2arb.dashboard.settings_path", return_value=Path(directory) / "settings.json"),
+                  patch("poe2arb.dashboard.QTimer.singleShot")):
+                window = Dashboard()
+                try:
+                    window.select_item("Metadata/Items/Currency/CurrencyCorrupt")
+                    window.start_select.setCurrentIndex(window.start_select.findData(EXALTED))
+                    window.capture_role = "买入"
+                    window._capture_done((
+                        {"selected_order": None},
+                        {"stock": 10, "best_quote": {
+                            "pay": 50, "receive": 1, "stock": 10, "confidence": 0.99},
+                         "levels": []},
+                    ))
+                    row = window.rows["买入"]
+                    self.assertEqual((row.pay.text(), row.receive.text(), row.stock.text()),
+                                     ("50", "1", "10"))
+                    self.assertIn("市场档位推算", window.capture_hint.text())
+                    self.assertNotIn(row.pair, window.quotes)
                 finally:
                     window.close()
 

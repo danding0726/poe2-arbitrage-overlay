@@ -159,19 +159,42 @@ def fill_whole_lots(levels: tuple[Level, ...], budget: int) -> Fill:
 
 @lru_cache(maxsize=64)
 def estimate_depth(buy_book: Book, sell_book: Book, convert_book: Book,
-                   stock_mode: str = "per_level") -> DepthPlan | None:
+                   stock_mode: str = "per_level", budget: int | None = None) -> DepthPlan | None:
     if (buy_book.target != sell_book.source or
             sell_book.target != convert_book.source or
             convert_book.target != buy_book.source):
         raise ValueError("多档交易方向无法连接")
+    if budget is not None and budget <= 0:
+        raise ValueError("可用预算必须是正整数")
     buy_levels = effective_levels(buy_book, stock_mode)
     sell_levels = effective_levels(sell_book, stock_mode)
     convert_levels = effective_levels(convert_book, stock_mode)
+    if budget is not None and all(len(levels) == 1 for levels in
+                                  (buy_levels, sell_levels, convert_levels)):
+        buy_level, sell_level, convert_level = (
+            buy_levels[0], sell_levels[0], convert_levels[0])
+        max_buy_lots = min(buy_level.stock // buy_level.receive, budget // buy_level.pay)
+        needed_sell_lots = (convert_level.pay + sell_level.receive - 1) // sell_level.receive
+        needed_items = needed_sell_lots * sell_level.pay
+        min_buy_lots = (needed_items + buy_level.receive - 1) // buy_level.receive
+        if (max_buy_lots < min_buy_lots or
+                sell_level.stock < needed_sell_lots * sell_level.receive or
+                convert_level.stock < convert_level.receive):
+            return None
+        unit_gain = (buy_level.receive * sell_level.rate * convert_level.rate
+                     - buy_level.pay)
+        chosen_lots = max_buy_lots if unit_gain > 0 else min_buy_lots
+        buy = fill_whole_lots(buy_levels, chosen_lots * buy_level.pay)
+        sell = fill_whole_lots(sell_levels, buy.received)
+        convert = fill_whole_lots(convert_levels, sell.received)
+        return DepthPlan(buy, sell, convert, True, sell_level.rate, convert_level.rate)
     spent = received = lots = 0
     buy_used = []
     best = None
     for index, level in enumerate(buy_levels):
         for _ in range(level.stock // level.receive):
+            if budget is not None and spent + level.pay > budget:
+                break
             if lots >= MAX_BUY_LOTS:
                 return replace(best, scanned_all=False) if best else None
             spent += level.pay

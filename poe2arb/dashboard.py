@@ -13,7 +13,7 @@ from pathlib import Path
 from PySide6.QtCore import QPoint, QRect, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QBoxLayout, QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout,
+    QApplication, QBoxLayout, QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QScrollArea,
     QSizePolicy, QVBoxLayout, QWidget,
 )
@@ -84,10 +84,13 @@ class RegionSelector(QWidget):
     selected = Signal(object)
     cancelled = Signal()
 
-    def __init__(self, image: QPixmap, label: str):
+    def __init__(self, image: QPixmap, label: str, guides: dict[str, list[int]] | None = None,
+                 active_key: str = "roi"):
         super().__init__()
         self.image = image
         self.label = label
+        self.guides = guides or {}
+        self.active_key = active_key
         self.start: QPoint | None = None
         self.end: QPoint | None = None
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
@@ -98,7 +101,26 @@ class RegionSelector(QWidget):
         painter.drawPixmap(self.rect(), self.image)
         painter.fillRect(self.rect(), QColor(0, 0, 0, 90))
         painter.setPen(QColor("#ffffff"))
-        painter.drawText(25, 38, translate_text(f"框选{self.label} · Esc 取消"))
+        hint = ("虚线是默认位置示例，可重新拖框" if self.guides
+                else "当前分辨率无默认示例，请手动框选")
+        painter.drawText(25, 38, translate_text(f"框选{self.label} · {hint} · Esc 取消"))
+        sx, sy = self.width() / self.image.width(), self.height() / self.image.height()
+        for key, color, label in (("roi", "#65cfff", "订单/金币"),
+                                  ("stock_roi", "#ffd27a", "比率/库存")):
+            bbox = self.guides.get(key)
+            if not bbox:
+                continue
+            left, top, right, bottom = bbox
+            rect = QRect(round(left * sx), round(top * sy),
+                         round((right - left) * sx), round((bottom - top) * sy))
+            painter.setPen(QPen(QColor(color), 4 if key == self.active_key else 2,
+                                Qt.PenStyle.DashLine))
+            painter.drawRect(rect)
+            tag = QRect(rect.left(), max(48, rect.top() - 28), 195, 24)
+            painter.fillRect(tag, QColor(15, 25, 28, 225))
+            painter.setPen(QColor(color))
+            painter.drawText(tag.adjusted(6, 0, -4, 0), Qt.AlignmentFlag.AlignVCenter,
+                             translate_text(f"{label} · 默认示例"))
         if self.start and self.end:
             rect = QRect(self.start, self.end).normalized()
             painter.setPen(QPen(QColor("#6bd6a0"), 3))
@@ -652,6 +674,23 @@ class Dashboard(QWidget):
         route.addWidget(self.reference, 1)
         root.addLayout(route)
 
+        budget_row = QHBoxLayout()
+        budget_row.addWidget(QLabel("可用预算"))
+        self.budget_input = QLineEdit(str(self.settings.get("budget", "")))
+        self.budget_input.setPlaceholderText("留空则不限额")
+        self.budget_input.setMaxLength(18)
+        self.budget_input.setMaximumWidth(180)
+        self.budget_input.setToolTip("填写当前买入通货的可用数量；只优化当前选中的交易路线。")
+        self.budget_input.textChanged.connect(self._budget_changed)
+        budget_row.addWidget(self.budget_input)
+        self.budget_currency = QLabel(item_name(self.start_select.currentData()))
+        budget_row.addWidget(self.budget_currency)
+        budget_hint = QLabel("按当前路线推荐预算内整手方案 · 留空保持原测算")
+        budget_hint.setObjectName("muted")
+        budget_row.addWidget(budget_hint)
+        budget_row.addStretch()
+        root.addLayout(budget_row)
+
         body = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         self.body_layout = body
         body.setSpacing(12)
@@ -688,7 +727,8 @@ class Dashboard(QWidget):
         self.profit_caption.setObjectName("muted")
         right.addWidget(self.profit_caption)
         self.metrics = {}
-        for label in ("本次投入", "买入获得物品", "订单手数（买/卖/换）", "最多完整轮数", "收益率", "三笔金币", "每百万金币收益"):
+        for label in ("本次投入", "预算剩余", "买入获得物品", "订单手数（买/卖/换）",
+                      "最多完整轮数", "收益率", "预算收益率", "三笔金币", "每百万金币收益"):
             line = QHBoxLayout()
             name = QLabel(label)
             name.setObjectName("muted")
@@ -763,6 +803,10 @@ class Dashboard(QWidget):
 
         footer = QHBoxLayout()
         footer.addStretch()
+        self.capture_preview_button = QPushButton("查看本次识别")
+        self.capture_preview_button.setEnabled(False)
+        self.capture_preview_button.clicked.connect(self._show_capture_preview)
+        footer.addWidget(self.capture_preview_button)
         trade_calibration = QPushButton("校准订单区")
         trade_calibration.clicked.connect(lambda: self.calibrate("roi"))
         footer.addWidget(trade_calibration)
@@ -878,6 +922,8 @@ class Dashboard(QWidget):
                 "gold_per_item_version": 1,
                 "recent_items": self.recent_items,
                 "start": self.start_select.currentData(), "exit": self.exit_select.currentData(),
+                "budget": self.budget_input.text().strip() if hasattr(self, "budget_input")
+                else self.settings.get("budget", ""),
                 "roi": self.settings.get("roi"), "stock_roi": self.settings.get("stock_roi"),
                 "stock_mode": self.stock_mode.currentData(),
                 "ignore_stock": self.ignore_stock.isChecked(),
@@ -1332,6 +1378,7 @@ class Dashboard(QWidget):
     def _route_changed(self):
         item = self.selected_item
         start, exit_currency = self.start_select.currentData(), self.exit_select.currentData()
+        self.budget_currency.setText(item_name(start) if start else "")
         pairs = {
             "买入": (start, item) if item and start else None,
             "卖出": (item, exit_currency) if item and exit_currency else None,
@@ -1351,6 +1398,18 @@ class Dashboard(QWidget):
         self._update_trade_path()
         self._save_settings()
         self.refresh(now)
+
+    def _budget_changed(self):
+        self._save_settings()
+        self.refresh()
+
+    def _budget_amount(self) -> int | None:
+        value = self.budget_input.text().strip().replace(",", "")
+        if not value:
+            return None
+        if not value.isascii() or not value.isdigit() or int(value) <= 0:
+            raise ValueError("可用预算请填写正整数的起始通货数量")
+        return int(value)
 
     def _quote_changed(self):
         row = next((row for row in self.rows.values() if self.sender() is row), None)
@@ -1455,6 +1514,7 @@ class Dashboard(QWidget):
 
     def calibrate(self, key: str):
         from PIL import ImageGrab
+        from .calibration import calibration_guides
 
         self.hide()
 
@@ -1466,7 +1526,8 @@ class Dashboard(QWidget):
                 pixmap = QPixmap()
                 pixmap.loadFromData(stream.getvalue())
                 label = "交易订单和金币区域" if key == "roi" else "悬停后的比率和库存区域"
-                self.region_selector = RegionSelector(pixmap, label)
+                self.region_selector = RegionSelector(
+                    pixmap, label, calibration_guides(image.size), key)
                 self.region_selector.selected.connect(lambda region: self._save_region(key, region))
                 self.region_selector.cancelled.connect(self.show)
             except Exception as exc:
@@ -1513,6 +1574,9 @@ class Dashboard(QWidget):
                     images.append(stream.getvalue())
                 else:
                     images.append(None)
+            self.last_capture_images = images
+            self.last_capture_result = None
+            self.capture_preview_button.setEnabled(True)
             self.show()
             self._job(self._read_capture, self._capture_done, *images)
         except Exception as exc:
@@ -1530,6 +1594,7 @@ class Dashboard(QWidget):
     def _capture_done(self, captured):
         from .ocr import resolve_capture_order
 
+        self.last_capture_result = captured
         panel, ladder = captured
         if self.capture_role == "核心":
             fields = self.core_fields
@@ -1540,7 +1605,8 @@ class Dashboard(QWidget):
                 return
             fields = (row.pay, row.receive, row.stock, row.gold)
             pair = row.pair
-        order = resolve_capture_order(panel.get("selected_order"),
+        selected_order = panel.get("selected_order")
+        order = resolve_capture_order(selected_order,
                                       ladder.get("best_quote") if ladder else None)
         if not order:
             self.capture_hint.setText("未可靠识别订单；请手动填写，或调整游戏交易栏后重读。")
@@ -1579,9 +1645,48 @@ class Dashboard(QWidget):
             depth_hint = "未读到库存梯度，请校准窗口底部的「比率/库存」区域，或手动填写库存。"
         else:
             depth_hint = "仅读到首档库存，暂按单档计算。"
+        source_hint = "已读取订单数量。"
+        if not selected_order:
+            source_hint = "订单区域被遮挡或未可靠识别，以下数量由市场档位推算，并非读取订单输入框。"
         self.capture_hint.setText(
-            f"已读到支付 {order['pay']}、获得 {order['receive']}。{depth_hint}请核对方向和库存，{next_step}"
+            f"{source_hint}支付 {order['pay']}、获得 {order['receive']}。"
+            f"{depth_hint}请核对方向和库存，{next_step}"
         )
+
+    def _show_capture_preview(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("本次实际截图与 OCR 文字 · 核对后再保存")
+        dialog.resize(1080, 680)
+        layout = QVBoxLayout(dialog)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        body = QVBoxLayout(content)
+        results = self.last_capture_result or (None, None)
+        for title, data, result in zip(("订单 / 金币", "比率 / 库存"),
+                                       self.last_capture_images, results):
+            body.addWidget(QLabel(title))
+            if data:
+                pixmap = QPixmap()
+                pixmap.loadFromData(data)
+                image = QLabel()
+                image.setPixmap(pixmap.scaledToWidth(
+                    min(980, max(pixmap.width(), 600)), Qt.TransformationMode.SmoothTransformation))
+                body.addWidget(image)
+            recognized_text = "未识别或正在识别"
+            if result:
+                recognized_text = "识别文字：" + " | ".join(result.get("lines", []))
+            text = QLabel(recognized_text)
+            text.setWordWrap(True)
+            text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            body.addWidget(text)
+        body.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
+        close = QPushButton("关闭")
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(close)
+        dialog.exec()
 
     def refresh(self, now: int | None = None):
         try:
@@ -1625,7 +1730,30 @@ class Dashboard(QWidget):
             )
             return
         buy, sell, convert = (self.quotes[pair] for pair in pairs)
+        try:
+            budget = self._budget_amount()
+        except ValueError as exc:
+            self._empty_result(str(exc), "预算输入无效")
+            return
         ignore_stock = self.ignore_stock.isChecked()
+        if budget is not None:
+            try:
+                evaluate(buy, sell, convert, now=now,
+                         require_fresh=False, require_stock=False)
+                books = self._budget_books(pairs, (buy, sell, convert), budget, ignore_stock)
+                plan = estimate_depth(*books, self.stock_mode.currentData(), budget=budget)
+            except ValueError as exc:
+                self._empty_result(str(exc), "报价无法完成整数交易")
+                return
+            if plan is None:
+                self._empty_result(
+                    f"预算 {budget:,} {item_name(start)} 内无法完成买入、卖出、换回三笔整手订单；"
+                    "请检查预算、报价手数和库存。", "预算内无完整交易"
+                )
+                return
+            self._show_budget_plan(plan, (buy, sell, convert), books, budget, now,
+                                   ignore_stock)
+            return
         depth_notice = ""
         if not ignore_stock and all(quote.stock is not None for quote in (buy, sell, convert)):
             books = tuple(self.depth_books.get(pair) or Book.from_quote(quote)
@@ -1678,11 +1806,13 @@ class Dashboard(QWidget):
         )
         values = {
             "本次投入": f"{outcome.start_amount:,} {item_name(start)}",
+            "预算剩余": "未设置",
             "买入获得物品": f"{outcome.item_amount:,} {item_name(item)}",
             "订单手数（买/卖/换）": (f"买 {outcome.buy_lots} · 卖 {outcome.sell_lots}"
                               f" · 换 {outcome.convert_lots}"),
             "最多完整轮数": "未校验" if ignore_stock else str(outcome.max_rounds),
             "收益率": f"{float(outcome.roi):+.2%}",
+            "预算收益率": "—",
             "三笔金币": f"{outcome.exact_gold:,}" if outcome.exact_gold is not None else "请填每个物品金币",
             "每百万金币收益": (f"{float(outcome.profit_per_million_gold):+,.1f} {item_name(start)}"
                               if outcome.profit_per_million_gold is not None else "金币待核验"),
@@ -1721,6 +1851,109 @@ class Dashboard(QWidget):
                if outcome.exact_gold is None else "报价与库存随时可能变化，下单前再核对。")
         )
 
+    def _budget_books(self, pairs: tuple[tuple[str, str], ...],
+                      quotes: tuple[Quote, Quote, Quote], budget: int,
+                      ignore_stock: bool) -> tuple[Book, Book, Book]:
+        buy, sell, convert = quotes
+        max_items = budget // buy.pay * buy.receive
+        max_exit = max_items // sell.pay * sell.receive
+        max_start = max_exit // convert.pay * convert.receive
+        books = []
+        for pair, quote, fallback_stock in zip(
+                pairs, quotes, (max_items, max_exit, max_start)):
+            if not ignore_stock and quote.stock is not None:
+                books.append(self.depth_books.get(pair) or Book.from_quote(quote))
+            else:
+                books.append(Book(quote.source, quote.target,
+                                  (Level(quote.pay, quote.receive, fallback_stock),),
+                                  quote.observed_at))
+        return tuple(books)
+
+    def _show_budget_plan(self, plan: DepthPlan, quotes: tuple[Quote, Quote, Quote],
+                          books: tuple[Book, Book, Book], budget: int, now: int,
+                          ignore_stock: bool):
+        buy, sell, convert = quotes
+        oldest = max(0, now - min(book.observed_at for book in books))
+        stock_checked = not ignore_stock and all(quote.stock is not None for quote in quotes)
+        if plan.estimated_profit <= 0:
+            state = "预算方案 · 无正收益，建议不交易"
+        elif plan.profit <= 0:
+            state = "预算方案 · 仅剩余估值盈利"
+        elif ignore_stock:
+            state = "预算理论方案 · 忽略库存"
+        elif not stock_checked:
+            state = "预算参考方案 · 库存未录齐"
+        elif oldest > MAX_QUOTE_AGE:
+            state = "预算参考方案 · 报价需更新"
+        else:
+            state = "预算内推荐方案 · 下单前核验"
+        self.result_state.setText(state)
+        profit_text = f"{float(plan.estimated_profit):+,.4f}".rstrip("0").rstrip(".")
+        self.profit.setText(f"≈{profit_text} {item_name(buy.source)}")
+        self.profit.setStyleSheet(
+            "color:#e9c170" if plan.estimated_profit > 0 else "color:#f29a8d")
+        self.profit_caption.setText(
+            f"预算内整手方案 + 剩余持仓估值 · 最老报价 {age_text(oldest)}前"
+        )
+        gold = None
+        if buy.gold is not None:
+            gold = (plan.buy.received * buy.gold
+                    + core_gold_cost(sell.target, plan.sell.received)
+                    + core_gold_cost(convert.target, plan.convert.received))
+        values = {
+            "本次投入": f"{plan.buy.spent:,} {item_name(buy.source)}",
+            "预算剩余": f"{budget - plan.buy.spent:,} {item_name(buy.source)}",
+            "买入获得物品": f"{plan.buy.received:,} {item_name(buy.target)}",
+            "订单手数（买/卖/换）": (f"买 {plan.buy.lots} · 卖 {plan.sell.lots}"
+                                  f" · 换 {plan.convert.lots}"),
+            "最多完整轮数": "已按预算选量",
+            "收益率": f"≈{float(plan.estimated_roi):+.2%}（按投入）",
+            "预算收益率": f"≈{float(plan.estimated_profit / budget):+.2%}（按总预算）",
+            "三笔金币": f"≈{gold:,}（估）" if gold is not None else "金币未填齐",
+            "每百万金币收益": (
+                f"≈{float(plan.estimated_profit * 1_000_000 / gold):+,.1f} "
+                f"{item_name(buy.source)}（估）" if gold else "金币待核验"),
+        }
+        for label, value in values.items():
+            self.metrics[label].setText(value)
+        details = [
+            f"预算 {budget:,} {item_name(buy.source)}；"
+            f"买入：付 {plan.buy.spent:,} {item_name(buy.source)} → "
+            f"得 {plan.buy.received:,} {item_name(buy.target)}；"
+            f"卖出：付 {plan.sell.spent:,} {item_name(buy.target)} → "
+            f"得 {plan.sell.received:,} {item_name(sell.target)}；"
+            f"换回：付 {plan.convert.spent:,} {item_name(sell.target)} → "
+            f"得 {plan.convert.received:,} {item_name(buy.source)}。",
+            f"未投入 {budget - plan.buy.spent:,} {item_name(buy.source)}；"
+            f"剩余 {plan.remaining_item:,} {item_name(buy.target)}、"
+            f"{plan.remaining_exit:,} {item_name(sell.target)}按首档汇率估值约 "
+            f"{float(plan.remaining_value):,.4f} {item_name(buy.source)}，"
+            "小数部分未实际成交，额外兑换金币未计入。",
+        ]
+        if plan.used_extra_levels:
+            level_details = []
+            for role, fill in zip(("买入", "卖出", "换回"),
+                                  (plan.buy, plan.sell, plan.convert)):
+                used = " + ".join(f"{index + 1}档×{count}" for index, count, _ in fill.used)
+                level_details.append(f"{role} {used}")
+            details.append("使用档位：" + "；".join(level_details) + "。")
+        if any(len(book.levels) > 1 for book in books):
+            details.append("多档按优价到劣价逐档估算，不保证所有组合中的全局最优。")
+        if plan.estimated_profit <= 0:
+            details.append("最优操作是不交易；以上是预算内损失最小的完整路径，仅供比较。")
+        elif plan.profit <= 0:
+            details.append("整手实际换回仍亏损，正收益仅来自剩余持仓估值，不宜当作可锁定利润。")
+        if ignore_stock:
+            details.append("已忽略库存，不能保证这些整手订单可成交。")
+        elif not stock_checked:
+            details.append("部分库存未录入，缺失处按预算假设足量，仅供参考。")
+        if oldest > MAX_QUOTE_AGE:
+            details.append("报价已超过 3 分钟，请重新核价。")
+        if not plan.scanned_all:
+            details.append("多档只扫描前 10,000 个买入手数，不保证全局最优。")
+        details.append("下单前请在游戏里核对合计数量、实际库存和金币。")
+        self.result_detail.setText("".join(details))
+
     def _show_depth_plan(self, plan: DepthPlan, quotes: tuple[Quote, Quote, Quote],
                          books: tuple[Book, Book, Book], now: int):
         buy, sell, convert = quotes
@@ -1747,11 +1980,13 @@ class Dashboard(QWidget):
                     + core_gold_cost(convert.target, plan.convert.received))
         values = {
             "本次投入": f"{plan.buy.spent:,} {item_name(buy.source)}",
+            "预算剩余": "未设置",
             "买入获得物品": f"{plan.buy.received:,} {item_name(buy.target)}",
             "订单手数（买/卖/换）": (f"买 {plan.buy.lots} · 卖 {plan.sell.lots}"
                               f" · 换 {plan.convert.lots}"),
             "最多完整轮数": "待游戏核验",
             "收益率": f"≈{float(plan.estimated_roi):+.2%}（含剩余估值）",
+            "预算收益率": "—",
             "三笔金币": f"≈{gold:,}（估）" if gold is not None else "金币未填齐",
             "每百万金币收益": (f"≈{float(estimated_profit * 1_000_000 / gold):+,.1f} {item_name(buy.source)}（估）"
                               if gold else "金币待核验"),

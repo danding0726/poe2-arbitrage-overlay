@@ -35,3 +35,22 @@ CAPTURE_PRESETS = {
 def capture_preset(screen: tuple[int, int]) -> dict:
     """Return independent ROI dictionaries for an exact reference layout."""
     return deepcopy(CAPTURE_PRESETS.get(tuple(screen), {}))
+
+
+def calibration_guides(screen: tuple[int, int]) -> dict[str, list[int]]:
+    """Scale reference boxes for display only; never use them as OCR presets."""
+    width, height = screen
+    if width <= 0 or height <= 0 or width * 9 != height * 16:
+        return {}
+    exact = CAPTURE_PRESETS.get(tuple(screen), {})
+    reference = CAPTURE_PRESETS[2560, 1440]
+    scale_x, scale_y = width / 2560, height / 1440
+    guides = {}
+    for key in ("roi", "stock_roi"):
+        if key in exact:
+            guides[key] = exact[key]["bbox"].copy()
+        else:
+            left, top, right, bottom = reference[key]["bbox"]
+            guides[key] = [int(left * scale_x + 0.5), int(top * scale_y + 0.5),
+                           int(right * scale_x + 0.5), int(bottom * scale_y + 0.5)]
+    return guides

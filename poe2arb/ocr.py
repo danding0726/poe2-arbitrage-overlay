@@ -29,6 +29,8 @@ def _selected_order_from_detections(lines, scores, boxes) -> dict | None:
     """Read the selected order using the game's labeled left/right columns."""
     if boxes is None or not (len(lines) == len(scores) == len(boxes)):
         return None
+    if _has_ladder_headers(lines, scores):
+        return None
     numbers = []
     labels = {}
     for text, score, box in zip(lines, scores, boxes):
@@ -49,6 +51,7 @@ def _selected_order_from_detections(lines, scores, boxes) -> dict | None:
             "score": score,
             "x": center_x,
             "y": sum(float(point[1]) for point in points) / len(points),
+            "height": max(float(point[1]) for point in points) - min(float(point[1]) for point in points),
         })
     # The calibrated panel should contain exactly two order amounts on its
     # upper row and one gold fee below. Extra standalone integers are unsafe.
@@ -56,6 +59,9 @@ def _selected_order_from_detections(lines, scores, boxes) -> dict | None:
         return None
     gold = max(numbers, key=lambda item: item["y"])
     amounts = [item for item in numbers if item is not gold]
+    if abs(amounts[0]["y"] - amounts[1]["y"]) > max(
+            12, min(item["height"] for item in amounts)):
+        return None
     if gold["y"] <= max(item["y"] for item in amounts):
         return None
     if labels.keys() >= {"receive", "pay"}:
@@ -100,7 +106,8 @@ def _ladder_quotes(lines, scores, boxes) -> list[dict]:
         if ratio:
             ratios.append((center_y, center_x, height, ratio.groups(), score))
         elif integer:
-            stocks.append((center_y, center_x, int(integer.group(1).replace(",", "")), score))
+            stocks.append((center_y, center_x, int(integer.group(1).replace(",", "")),
+                           score, height))
     rows = []
     used_stocks = set()
     for ratio_y, ratio_x, height, (left_text, right_text), ratio_score in sorted(ratios):
@@ -108,10 +115,14 @@ def _ladder_quotes(lines, scores, boxes) -> list[dict]:
             (index, stock) for index, stock in enumerate(stocks)
             if index not in used_stocks and stock[1] > ratio_x
             and abs(stock[0] - ratio_y) <= max(10, height * 0.6)
+            # OCR can merge a vertical column (4, 6, 3) into a confident "463".
+            # Its box spans several rows, so it cannot be this row's stock.
+            and height * 0.5 <= stock[4] <= height * 1.6
         ]
         if not same_row:
             continue
-        index, (_, _, stock, stock_score) = min(same_row, key=lambda item: abs(item[1][0] - ratio_y))
+        index, (_, _, stock, stock_score, _) = min(
+            same_row, key=lambda item: abs(item[1][0] - ratio_y))
         used_stocks.add(index)
         left = Fraction(left_text.replace(",", ""))
         right = Fraction(right_text.replace(",", ""))
@@ -177,6 +188,12 @@ def _parse(lines: list[str], scores: list[float]) -> dict:
     return {"lines": lines, "confidence": round(min(scores), 3) if scores else 0}
 
 
+def _has_ladder_headers(lines, scores) -> bool:
+    reliable = [text.replace(" ", "") for text, score in zip(lines, scores) if score >= 0.7]
+    return (any(text in ("比率", "Ratio") for text in reliable)
+            and any(text in ("库存", "庫存", "Stock") for text in reliable))
+
+
 def read_exchange_panel(data: bytes) -> dict:
     """Read the selected trade panel above the listings, scaled to a calibrated ROI."""
     from PIL import ImageEnhance, ImageOps
@@ -192,6 +209,10 @@ def read_exchange_panel(data: bytes) -> dict:
     result["selected_order"] = _selected_order_from_detections(
         lines, scores, recognized.boxes
     )
+    # The tooltip covers payment/gold fields. Neither full-panel integers nor
+    # fixed-position crops can safely recover those obscured order values.
+    if _has_ladder_headers(lines, scores):
+        return result
     if result["selected_order"]:
         return result
     values = []
@@ -233,7 +254,10 @@ def read_stock_region(data: bytes) -> dict:
     result = RapidOCR()(np.asarray(image))
     lines = list(result.txts or [])
     scores = list(result.scores or [])
-    levels = _ladder_quotes(lines, scores, getattr(result, "boxes", None))
+    # Without the tooltip, this ROI contains the selected order's ratio and
+    # payment amount. Those numbers must not masquerade as a stock row.
+    levels = (_ladder_quotes(lines, scores, getattr(result, "boxes", None))
+              if _has_ladder_headers(lines, scores) else [])
     ladder_quote = next((row for row in levels if row["pay"] and row["receive"]), None)
     if ladder_quote:
         return {
