@@ -343,6 +343,8 @@ class DashboardTests(unittest.TestCase):
                 window = Dashboard()
                 try:
                     item = "Metadata/Items/Currency/CurrencyCorrupt"
+                    window.league.addItem("测试联赛")
+                    window.league.setCurrentText("测试联赛")
                     window.select_item(item)
                     for role, values in (
                         ("买入", (30, 2, 10, 50)),

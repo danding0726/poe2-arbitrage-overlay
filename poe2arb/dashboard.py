@@ -1265,7 +1265,7 @@ class Dashboard(QWidget):
 
     def _set_recommended_route(self, route: list[tuple[str, tuple[str, str], int, int]]):
         self._recommended_route = route
-        self.add_recommended_route.setEnabled(bool(route))
+        self.add_recommended_route.setEnabled(bool(route and self.league.currentText()))
 
     def _add_recommended_route(self):
         if not self._recommended_route or not self.selected_item:
