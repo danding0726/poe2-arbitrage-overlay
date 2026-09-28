@@ -19,6 +19,17 @@ def language() -> str:
 
 # Long phrases come first so shorter token replacements do not disturb them.
 _EN_REPLACEMENTS = (
+    ("OCR 常驻监测订单区与库存区；仅高置信度完整订单会自动写入。",
+     "OCR continuously monitors the order and stock regions; only complete high-confidence orders are saved automatically."),
+    ("请先校准订单区和比率/库存区，OCR 会随后自动开始",
+     "Calibrate the order and ratio/stock regions; OCR will then start automatically"),
+    ("检测到完整订单；当前方向含手动修改，已保留手动内容。",
+     "A complete order was detected; manual changes for this direction were preserved."),
+    ("截图区域已保存；OCR 常驻监测已恢复。",
+     "Screenshot region saved; continuous OCR monitoring has resumed."),
+    ("OCR 已自动记录", "OCR automatically saved "),
+    ("OCR 识别失败：", "OCR failed: "),
+    ("OCR 等待中：", "OCR waiting: "),
     ("未可靠识别订单；请手动填写，或调整游戏交易栏后重读。",
      "The order was not read reliably; enter it manually or adjust the in-game panel and retry."),
     ("截图区域已保存；现在可以重新读取对应交易方向。",

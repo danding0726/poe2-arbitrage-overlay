@@ -23,6 +23,7 @@ from .core import historical_edges, latest_market_hour
 from .data import app_data_dir, leagues, load_snapshot, sync_recent
 from .depth import Book, DepthPlan, Level, captured_book, effective_levels, estimate_depth
 from .i18n import language as active_language, set_language, translate_text
+from .ocr_monitor import OcrPollingState, complete_capture
 from .scout import MAX_AGE_SECONDS, fetch_scout_snapshot, load_scout_snapshot, scout_edges, snapshot_age
 from .single_item import (CHAOS, CORE, DIVINE, EXALTED, MAX_QUOTE_AGE, Quote,
                           core_gold_cost, evaluate, indicative_paths, item_unit_gold,
@@ -30,6 +31,8 @@ from .single_item import (CHAOS, CORE, DIVINE, EXALTED, MAX_QUOTE_AGE, Quote,
 from .trade_log import ROLES, Trade, summarize_trades, trade_gold
 
 MAX_HOURLY_LEAD_AGE_SECONDS = 2 * 3600
+OCR_POLL_INTERVAL_MS = 1200
+OCR_AUTO_CONFIDENCE = 0.90
 
 
 def settings_path() -> Path:
@@ -220,7 +223,7 @@ class RateDirection(QFrame):
 class RateCard(QFrame):
     selected = Signal(str, str)
     save_requested = Signal()
-    capture_requested = Signal()
+    manually_edited = Signal()
 
     def __init__(self, a: str, b: str):
         super().__init__()
@@ -262,12 +265,10 @@ class RateCard(QFrame):
                              else f"当前游戏订单的{title}数量")
             grid.addWidget(QLabel(title), 0, index)
             grid.addWidget(field, 1, index)
+            field.textEdited.connect(lambda _text: self.manually_edited.emit())
             self.fields.append(field)
         edit.addLayout(grid)
         actions = QHBoxLayout()
-        capture = QPushButton("截图读取")
-        capture.clicked.connect(self.capture_requested.emit)
-        actions.addWidget(capture)
         save = QPushButton("保存报价")
         save.clicked.connect(self.save_requested.emit)
         actions.addWidget(save)
@@ -296,6 +297,8 @@ class RateCard(QFrame):
 class QuoteRow(QFrame):
     requested = Signal(str)
     changed = Signal()
+    activated = Signal(str)
+    manually_edited = Signal(str)
     FIELD_WIDTH = 82
     ACTION_WIDTH = 112
     DIRECTION_MIN_WIDTH = 180
@@ -354,7 +357,7 @@ class QuoteRow(QFrame):
             field.setFixedWidth(self.FIELD_WIDTH)
             if col < 2:
                 field.setToolTip("可填小数，保存后按比例换算为最小整数订单")
-            field.textEdited.connect(lambda _text: self.save_timer.start())
+            field.textEdited.connect(self._field_edited)
             field.editingFinished.connect(self._finish_edit)
             label = QLabel(title)
             label.setObjectName("fieldLabel")
@@ -365,20 +368,15 @@ class QuoteRow(QFrame):
         self.age = QLabel("待录入")
         self.age.setObjectName("muted")
         grid.addWidget(self.age, 2, 0, 1, 2)
-        self.capture = QPushButton("截图读取")
-        self.capture.clicked.connect(lambda: self.requested.emit(self.role))
-        actions = QVBoxLayout()
-        actions.setContentsMargins(0, 0, 0, 0)
-        actions.addWidget(self.capture)
-        self.save = QPushButton("保存读取")
+        # Kept as hidden compatibility hooks for callers that used the old
+        # one-shot workflow. OCR no longer has a visible click trigger.
+        self.capture = QPushButton("截图读取", self)
+        self.capture.hide()
+        self.save = QPushButton("保存读取", self)
         self.save.clicked.connect(self._finish_edit)
-        actions.addWidget(self.save)
-        action_host = QWidget()
-        action_host.setFixedWidth(self.ACTION_WIDTH)
-        action_host.setLayout(actions)
+        self.save.hide()
         grid.setColumnMinimumWidth(5, self.FIELD_WIDTH)
         grid.setColumnStretch(6, 1)
-        grid.addWidget(action_host, 1, 6, 2, 1, Qt.AlignmentFlag.AlignRight)
         self.depth_info = QLabel()
         self.depth_info.setObjectName("muted")
         self.depth_info.setWordWrap(True)
@@ -388,10 +386,19 @@ class QuoteRow(QFrame):
         self.save_timer.stop()
         self.changed.emit()
 
+    def _field_edited(self, _text: str):
+        self.activated.emit(self.role)
+        self.manually_edited.emit(self.role)
+        self.save_timer.start()
+
+    def mousePressEvent(self, event):
+        self.activated.emit(self.role)
+        super().mousePressEvent(event)
+
     def resizeEvent(self, event):
         grid = self.layout()
         margins = grid.contentsMargins()
-        other_width = (4 * self.FIELD_WIDTH + self.ACTION_WIDTH
+        other_width = (4 * self.FIELD_WIDTH
                        + 6 * grid.horizontalSpacing()
                        + margins.left() + margins.right())
         width = min(self.DIRECTION_MAX_WIDTH,
@@ -505,6 +512,11 @@ class Dashboard(QWidget):
         self.jobs: list[Job] = []
         self._closing = False
         self.capture_role: str | None = None
+        self.ocr_state = OcrPollingState()
+        self._ocr_target_role: str | None = None
+        self._ocr_target_pair: tuple[str, str] | None = None
+        self._ocr_manual_locks: set[tuple[str, str]] = set()
+        self._ocr_last_signature: tuple[int, ...] | None = None
         self.region_selector: RegionSelector | None = None
         self.selected_item: str | None = None
         self._active_lead_source = "none"
@@ -526,6 +538,10 @@ class Dashboard(QWidget):
         self.scout_timer = QTimer(self)
         self.scout_timer.timeout.connect(self.update_scout)
         self.scout_timer.start(5 * 60 * 1000)
+        self.ocr_timer = QTimer(self)
+        self.ocr_timer.setInterval(OCR_POLL_INTERVAL_MS)
+        self.ocr_timer.timeout.connect(self._poll_ocr)
+        self.start_ocr_monitoring()
         QTimer.singleShot(100, self.update_history)
         QTimer.singleShot(300, self.update_scout)
 
@@ -601,7 +617,7 @@ class Dashboard(QWidget):
         for card in self.rate_cards:
             card.selected.connect(self.edit_core_rate)
             card.save_requested.connect(self.save_core_rate)
-            card.capture_requested.connect(self.capture_core_rate)
+            card.manually_edited.connect(self._manual_core_edit)
             market.addWidget(card, 1, Qt.AlignmentFlag.AlignTop)
         root.addLayout(market)
 
@@ -698,10 +714,11 @@ class Dashboard(QWidget):
         left.addWidget(self._section("当前订单"))
         self.rows = {role: QuoteRow(role) for role in ("买入", "卖出", "换回")}
         for row in self.rows.values():
-            row.requested.connect(self.capture_quote)
             row.changed.connect(self._quote_changed)
+            row.activated.connect(self._activate_ocr_role)
+            row.manually_edited.connect(self._mark_manual_edit)
             left.addWidget(row)
-        self.capture_hint = QLabel("交易物品金币手动填写；换得基础通货的金币费自动计算。")
+        self.capture_hint = QLabel("OCR 常驻监测订单区与库存区；仅高置信度完整订单会自动写入。")
         self.capture_hint.setWordWrap(True)
         self.capture_hint.setObjectName("muted")
         left.addWidget(self.capture_hint)
@@ -742,6 +759,12 @@ class Dashboard(QWidget):
         self.result_detail.setWordWrap(True)
         self.result_detail.setObjectName("detail")
         right.addWidget(self.result_detail)
+        self.add_recommended_route = QPushButton("加入推荐路线")
+        self.add_recommended_route.setEnabled(False)
+        self.add_recommended_route.setToolTip(
+            "把当前推荐的买入、卖出、换回数量一次加入交易记录，之后可按实际成交直接修改")
+        self.add_recommended_route.clicked.connect(self._add_recommended_route)
+        right.addWidget(self.add_recommended_route)
         right.addStretch()
         body.addWidget(result, 2)
         root.addLayout(body, 1)
@@ -754,7 +777,7 @@ class Dashboard(QWidget):
         self.trade_route.setObjectName("direction")
         self.trade_route.setWordWrap(True)
         journal_layout.addWidget(self.trade_route)
-        self.trade_leg = QLabel("选择买入、卖出或换回后，填写游戏里实际成交的支付与获得。")
+        self.trade_leg = QLabel("可一键加入推荐路线，再直接修改每笔交易的真实支付与获得。")
         self.trade_leg.setObjectName("muted")
         self.trade_leg.setWordWrap(True)
         journal_layout.addWidget(self.trade_leg)
@@ -793,11 +816,19 @@ class Dashboard(QWidget):
         journal_layout.addWidget(self.trade_balances)
         history = QHBoxLayout()
         self.trade_list = QListWidget()
-        self.trade_list.setMaximumHeight(120)
+        self.trade_list.setMaximumHeight(190)
+        self.trade_list.setSpacing(2)
         history.addWidget(self.trade_list, 1)
+        history_actions = QVBoxLayout()
+        duplicate = QPushButton("复制选中记录")
+        duplicate.setToolTip("复制一笔交易，适合把同一方向拆成多次成交")
+        duplicate.clicked.connect(self._duplicate_trade)
+        history_actions.addWidget(duplicate)
         remove = QPushButton("删除选中记录")
         remove.clicked.connect(self._remove_trade)
-        history.addWidget(remove)
+        history_actions.addWidget(remove)
+        history_actions.addStretch()
+        history.addLayout(history_actions)
         journal_layout.addLayout(history)
         root.addWidget(journal)
 
@@ -976,13 +1007,143 @@ class Dashboard(QWidget):
                 continue
         return trades
 
-    def _job(self, function, callback, *args):
+    def _job(self, function, callback, *args, failure=None):
         job = Job(function, *args)
         self.jobs.append(job)
         job.done.connect(callback)
-        job.failed.connect(lambda message: self.status.setText(message))
+        job.failed.connect(failure or (lambda message: self.status.setText(message)))
         job.finished.connect(lambda: self._job_finished(job))
         job.start()
+
+    def start_ocr_monitoring(self):
+        self.ocr_state.start()
+        self.ocr_timer.start()
+
+    def stop_ocr_monitoring(self):
+        self.ocr_state.stop()
+        if hasattr(self, "ocr_timer"):
+            self.ocr_timer.stop()
+
+    def _set_ocr_target(self, role: str | None, pair: tuple[str, str] | None):
+        if (role, pair) == (self._ocr_target_role, self._ocr_target_pair):
+            return
+        self._ocr_target_role = role
+        self._ocr_target_pair = pair
+        self.ocr_state.restart()
+
+    def _activate_ocr_role(self, role: str):
+        row = self.rows.get(role) if hasattr(self, "rows") else None
+        if row is not None:
+            self._set_ocr_target(role, row.pair)
+
+    def _mark_manual_edit(self, role: str):
+        row = self.rows.get(role)
+        if row and row.pair:
+            self._ocr_manual_locks.add(row.pair)
+
+    def _manual_core_edit(self):
+        if hasattr(self, "core_pair"):
+            self._ocr_manual_locks.add(self.core_pair)
+
+    def _poll_ocr(self):
+        token = self.ocr_state.begin()
+        if token is None:
+            return
+        from PIL import ImageGrab
+        from .calibration import capture_preset
+
+        try:
+            full = ImageGrab.grab(all_screens=False)
+            preset = capture_preset(full.size)
+            trade = self.settings.get("roi") or preset.get("roi")
+            stock = self.settings.get("stock_roi") or preset.get("stock_roi")
+            if not trade or not stock:
+                raise ValueError("请先校准订单区和比率/库存区，OCR 会随后自动开始")
+            for region in (trade, stock):
+                if region.get("screen") != list(full.size):
+                    raise ValueError("分辨率已变化，请重新校准截图区域")
+            images = []
+            for region in (trade, stock):
+                stream = io.BytesIO()
+                full.crop(tuple(region["bbox"])).save(stream, format="PNG")
+                images.append(stream.getvalue())
+        except Exception as exc:
+            if self.ocr_state.fail(token):
+                self.capture_hint.setText(f"OCR 等待中：{exc}")
+            return
+        self._job(
+            self._read_capture,
+            lambda captured, current=token: self._ocr_done(current, captured),
+            *images,
+            failure=lambda message, current=token: self._ocr_failed(current, message),
+        )
+
+    def _ocr_failed(self, token: int, message: str):
+        if self.ocr_state.fail(token):
+            self.capture_hint.setText(f"OCR 识别失败：{message}")
+
+    def _ocr_done(self, token: int, captured):
+        if not self.ocr_state.finish(token):
+            return
+        complete = complete_capture(captured, OCR_AUTO_CONFIDENCE)
+        if complete is None:
+            return
+        order, ladder, signature = complete
+        if signature == self._ocr_last_signature:
+            return
+        self._ocr_last_signature = signature
+        role, pair = self._ocr_target_role, self._ocr_target_pair
+        if pair is None or pair in self._ocr_manual_locks:
+            self.capture_hint.setText("检测到完整订单；当前方向含手动修改，已保留手动内容。")
+            return
+        item_gold = None
+        if pair[1] not in CORE and order.get("gold") is not None:
+            item_gold = item_unit_gold(int(order["gold"]), int(order["receive"]))
+        high_confidence_ladder = dict(ladder)
+        high_confidence_ladder["levels"] = [
+            level for level in ladder.get("levels", [])
+            if float(level.get("confidence", 0)) >= OCR_AUTO_CONFIDENCE
+        ]
+        if role == "核心":
+            if not hasattr(self, "core_pair") or self.core_pair != pair:
+                return
+            for field, value in zip(self.core_fields,
+                                    (order["pay"], order["receive"], ladder["stock"])):
+                field.setText(str(value))
+            selected = Quote(*pair, int(order["pay"]), int(order["receive"]),
+                             int(ladder["stock"]), int(time.time()))
+            book = captured_book(selected, high_confidence_ladder)
+            if book:
+                self.pending_depth[pair] = book
+            self.save_core_rate()
+        else:
+            row = self.rows.get(role)
+            if row is None or row.pair != pair:
+                return
+            values = (order["pay"], order["receive"], ladder["stock"], item_gold)
+            for field, value in zip((row.pay, row.receive, row.stock, row.gold), values):
+                field.setText(str(value) if value is not None else "")
+            selected = Quote(*pair, int(order["pay"]), int(order["receive"]),
+                             int(ladder["stock"]), int(time.time()), item_gold)
+            book = captured_book(selected, high_confidence_ladder)
+            if book:
+                self.pending_depth[pair] = book
+            self._save_row(row)
+            self.capture_hint.setText(
+                f"OCR 已自动记录{role}：支付 {order['pay']}、获得 {order['receive']}、库存 {ladder['stock']}。"
+            )
+            self._advance_ocr_target(role)
+
+    def _advance_ocr_target(self, completed_role: str):
+        roles = tuple(self.rows)
+        start = roles.index(completed_role) if completed_role in roles else -1
+        ordered = roles[start + 1:] + roles[:start + 1]
+        for role in ordered:
+            row = self.rows[role]
+            if (row.pair and row.pair not in self.quotes
+                    and row.pair not in self._ocr_manual_locks):
+                self._set_ocr_target(role, row.pair)
+                return
 
     def _job_finished(self, job: Job):
         if job in self.jobs:
@@ -999,6 +1160,10 @@ class Dashboard(QWidget):
         super().resizeEvent(event)
 
     def closeEvent(self, event):
+        self.stop_ocr_monitoring()
+        if hasattr(self, "rows"):
+            for row in self.rows.values():
+                row.save_timer.stop()
         if self.jobs:
             self._closing = True
             self.hide()
@@ -1395,6 +1560,16 @@ class Dashboard(QWidget):
                 if known_fee is not None:
                     row.gold.setText(str(known_fee))
             row.set_depth(self.depth_books.get(pair) if pair else None)
+        next_role = next((role for role, row in self.rows.items()
+                          if row.pair and row.pair not in self.quotes
+                          and row.pair not in self._ocr_manual_locks), None)
+        if next_role is None:
+            next_role = next((role for role, row in self.rows.items()
+                              if row.pair and row.pair not in self._ocr_manual_locks), None)
+        if next_role is None:
+            self._set_ocr_target(None, None)
+        else:
+            self._activate_ocr_role(next_role)
         self._update_trade_path()
         self._save_settings()
         self.refresh(now)
@@ -1478,6 +1653,7 @@ class Dashboard(QWidget):
                 self.active_core_card = card
         self.core_fields = self.active_core_card.fields
         self.active_core_card.edit(source, target, self.quotes.get(self.core_pair))
+        self._set_ocr_target("核心", self.core_pair)
         self._translate_ui()
 
     def save_core_rate(self):
@@ -1516,6 +1692,7 @@ class Dashboard(QWidget):
         from PIL import ImageGrab
         from .calibration import calibration_guides
 
+        self.stop_ocr_monitoring()
         self.hide()
 
         def open_selector():
@@ -1529,9 +1706,10 @@ class Dashboard(QWidget):
                 self.region_selector = RegionSelector(
                     pixmap, label, calibration_guides(image.size), key)
                 self.region_selector.selected.connect(lambda region: self._save_region(key, region))
-                self.region_selector.cancelled.connect(self.show)
+                self.region_selector.cancelled.connect(self._calibration_cancelled)
             except Exception as exc:
                 self.show()
+                self.start_ocr_monitoring()
                 self.capture_hint.setText(f"校准失败：{exc}")
 
         QTimer.singleShot(700, open_selector)
@@ -1540,7 +1718,12 @@ class Dashboard(QWidget):
         self.settings[key] = region
         self._save_settings()
         self.show()
-        self.capture_hint.setText("截图区域已保存；现在可以重新读取对应交易方向。")
+        self.start_ocr_monitoring()
+        self.capture_hint.setText("截图区域已保存；OCR 常驻监测已恢复。")
+
+    def _calibration_cancelled(self):
+        self.show()
+        self.start_ocr_monitoring()
 
     def capture_core_rate(self):
         if not hasattr(self, "core_pair"):

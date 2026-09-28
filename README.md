@@ -42,11 +42,11 @@ Use the **Language** selector in the header to switch between **中文** and **E
 
    On the game screen, the right side (**I Have**) is what you pay and the left side (**I Want**) is what you receive.
 
-4. **Enter or capture the live orders.** For each leg, fill in the amount paid, amount received, and available stock. The app saves and recalculates after input stops. For the item purchase, also enter the gold required for one traded item; total gold is derived from the number of items received.
+4. **Keep the in-game order visible.** OCR stays online and polls the calibrated selected-order and stock-ladder regions. A complete reading is saved automatically only when both regions are high-confidence. The app starts with the first missing leg and advances through Buy, Sell, and Return; click a quote row to make it active again. Manual edits lock that quote for the session, so later OCR results cannot overwrite them.
 
    Paid and received amounts may be decimal. On save, a fractional ratio is reduced to the smallest integer order—for example, `1.5 -> 1` becomes `3 -> 2`. When both values are already integers, the original order size is retained. A quote can still be saved as a reference if stock does not cover one order, but it is marked **Insufficient stock**. A screenshot's total item gold is converted to per-item gold only when it divides evenly by the item quantity.
 
-   Core-rate cards show both directed quotes and their ages. Use **Update** on the relevant card to enter an order or read it from a screenshot. If OCR regions drift, use the two calibration controls at the bottom of the window. The calibration view overlays color-coded dashed examples for the Order/Gold and Ratio/Stock regions; these are guides only because positions vary with the game UI and display scaling.
+   Core-rate cards show both directed quotes and their ages. Use **Update** to select a direction for continuous OCR or to enter it manually. If OCR regions drift, use the two calibration controls at the bottom of the window. The calibration view overlays color-coded dashed examples for the Order/Gold and Ratio/Stock regions; these are guides only because positions vary with the game UI and display scaling.
 
 5. **Review the calculation.** The right side reports progress across the three quotes. Once all legs are present, the app shows the starting cost and profit for the smallest complete cycle, return percentage, maximum cycles allowed by stock, and—when exact per-order gold is known—profit per million gold.
 
@@ -62,13 +62,13 @@ The trade log spells out the full path—**starting currency -> traded item -> s
 
 ## Multi-level depth and OCR
 
-When a screenshot contains the full market ladder, OCR temporarily stores multiple ratios and stock levels. Verify direction and amounts, then select **Save reading** for that row before the data is used.
+When the calibrated stock region contains the full market ladder, high-confidence OCR stores multiple ratios and stock levels with the automatically saved quote. Partial, low-confidence, mismatched, and stale-session results are ignored.
 
 The **Multi-level stock** mode defaults to **Per level**, where each row contains independent stock. Select **Cumulative** only when later rows include earlier rows, matching the in-game display. Multi-level results are always labeled **Estimate**. The app consumes complete integer orders from best to worse levels, reports the used levels and remaining position, and values any leftover item or intermediate currency with the best directed rate, allowing decimals.
 
 The details also list the actual whole-order return amount. Decimal valuation is not a completed order, and additional conversion gold is not included. Gold is computed from the received quantities of completed orders and the applicable unit fees. Before trading, enter the combined amount in game and verify the actual payment and receipt. If OCR finds fewer than two levels, the app falls back to a single-level calculation.
 
-The application does not operate the game or place orders. A direction that is not currently visible in the game must be opened by the player before it can be read. Screenshot capture uses one delayed screenshot and requires the player to verify the direction.
+The application does not operate the game or place orders. A direction that is not currently visible in the game must be opened by the player before it can be read. OCR only observes calibrated screen regions; the player must still verify the active direction.
 
 Hovering the stock ladder can cover the order inputs. In that case, the app explicitly marks quantities inferred from market depth rather than read from the order fields. Stock OCR rejects number boxes spanning multiple rows so adjacent values are not accidentally concatenated. Full-depth capture also requires the Ratio/Stock headers. Use **View latest capture** at the bottom of the window to inspect both captured regions and the raw OCR text; screenshots remain only in memory for the current run and are not uploaded.
 

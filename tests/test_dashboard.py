@@ -581,6 +581,51 @@ class DashboardTests(unittest.TestCase):
                 finally:
                     window.close()
 
+    def test_continuous_ocr_ignores_stale_results_and_preserves_manual_edits(self):
+        captured = (
+            {"selected_order": {
+                "pay": 30, "receive": 2, "gold": 1000, "confidence": 0.98,
+            }},
+            {"stock": 10, "confidence": 0.97, "best_quote": None, "levels": []},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            with (patch("poe2arb.dashboard.settings_path",
+                        return_value=Path(directory) / "settings.json"),
+                  patch("poe2arb.dashboard.QTimer.singleShot")):
+                window = Dashboard()
+                try:
+                    window.select_item("Metadata/Items/Currency/CurrencyCorrupt")
+                    buy = window.rows["买入"]
+                    stale_token = window.ocr_state.begin()
+                    window._activate_ocr_role("卖出")
+                    window._ocr_done(stale_token, captured)
+                    self.assertNotIn(buy.pair, window.quotes)
+
+                    window._activate_ocr_role("买入")
+                    QTest.keyClicks(buy.pay, "99")
+                    current_token = window.ocr_state.begin()
+                    window._ocr_done(current_token, captured)
+                    self.assertEqual(buy.pay.text(), "99")
+                    self.assertNotIn(buy.pair, window.quotes)
+                    self.assertIn("手动修改", window.capture_hint.text())
+
+                    sell = window.rows["卖出"]
+                    window._activate_ocr_role("卖出")
+                    auto_token = window.ocr_state.begin()
+                    window._ocr_done(auto_token, (
+                        {"selected_order": {
+                            "pay": 2, "receive": 1, "gold": 160,
+                            "confidence": 0.98,
+                        }},
+                        {"stock": 4, "confidence": 0.97,
+                         "best_quote": None, "levels": []},
+                    ))
+                    self.assertEqual(window.quotes[sell.pair].pay, 2)
+                    self.assertEqual(sell.stock.text(), "4")
+                    self.assertIn("自动记录卖出", window.capture_hint.text())
+                finally:
+                    window.close()
+
     def test_hidden_order_uses_fifty_exalted_ladder_and_discloses_inference(self):
         with tempfile.TemporaryDirectory() as directory:
             with (patch("poe2arb.dashboard.settings_path", return_value=Path(directory) / "settings.json"),
